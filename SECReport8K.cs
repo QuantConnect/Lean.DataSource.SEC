@@ -33,6 +33,11 @@ namespace QuantConnect.DataSource
     public class SECReport8K : BaseData, ISECReport
     {
         /// <summary>
+        /// Data source ID
+        /// </summary>
+        public static int DataSourceId { get; } = 2006;
+
+        /// <summary>
         /// Contents of the actual SEC report
         /// </summary>
         public SECReportSubmission Report { get; }

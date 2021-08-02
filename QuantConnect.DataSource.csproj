@@ -9,9 +9,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="QuantConnect.Common" Version="2.5.12183" />
+    <PackageReference Include="QuantConnect.Common" Version="2.5.*" />
     <PackageReference Include="protobuf-net" Version="3.0.29" />
-    <PackageReference Include="protobuf-net.Core" Version="3.0.29" />
     <PackageReference Include="Newtonsoft.Json" Version="12.0.3" />
   </ItemGroup>
 
@@ -24,6 +23,12 @@
     <None Remove="process.sample.ipynb" />
     <None Remove="process.sample.py" />
     <None Remove="process.sample.sh" />
+    <Compile Remove="SECReport8KAlgorithm.cs" />
+    <None Remove="SECReport8KAlgorithm.py" />
+    <Compile Remove="SECReportBenchmarkAlgorithm.cs" />
+    <None Remove="SECReportBenchmarkAlgorithm.py" />
+    <Compile Remove="SECReportDataAlgorithm.cs" />
+    <None Remove="SECReportDataAlgorithm.py" />
   </ItemGroup>
 
 </Project>

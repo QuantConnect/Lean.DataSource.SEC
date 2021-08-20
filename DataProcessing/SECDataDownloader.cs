@@ -66,11 +66,13 @@ namespace QuantConnect.DataProcessing
             // We will be rate limited from the SEC website if we don't identify ourselves via User-Agent.
             // Also we use a global HttpClient instance to enable HTTP keep-alive, which will improve performance
             // and also reduce the chances of being rate-limited (plus, this is recommended practice).
+            var companyName = Environment.GetEnvironmentVariable("SEC_UA_COMPANY_NAME");
+            var companyEmail = Environment.GetEnvironmentVariable("SEC_UA_COMPANY_EMAIL");
 
             using (var client = new HttpClient())
             {
-                var userAgent = new ProductInfoHeaderValue("User-Agent", $"QC-SEC-{Guid.NewGuid()}");
-                client.DefaultRequestHeaders.UserAgent.Add(userAgent);
+                var userAgent = string.Join(" ", companyName, companyEmail);
+                client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", userAgent);
                 
                 Directory.CreateDirectory(Path.Combine(rawDestination, "indexes"));
 

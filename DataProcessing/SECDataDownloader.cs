@@ -20,6 +20,7 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Threading.Tasks;
+using QuantConnect.Configuration;
 using QuantConnect.DataSource;
 using QuantConnect.Logging;
 using QuantConnect.Util;
@@ -66,11 +67,22 @@ namespace QuantConnect.DataProcessing
             // We will be rate limited from the SEC website if we don't identify ourselves via User-Agent.
             // Also we use a global HttpClient instance to enable HTTP keep-alive, which will improve performance
             // and also reduce the chances of being rate-limited (plus, this is recommended practice).
+            var companyName = Config.Get("sec-user-agent-company-name");
+            var companyEmail = Config.Get("sec-user-agent-company-email");
+
+            if (string.IsNullOrEmpty(companyName))
+            {
+                throw new ArgumentException("The SEC requires a company name to download data using automation. Please edit `config.json` and add a `sec-user-agent-company-name` entry with your company name");
+            }
+            if (string.IsNullOrEmpty(companyEmail))
+            {
+                throw new ArgumentException("The SEC requires a company email contact to download data using automation. Please edit `config.json` and add a `sec-user-agent-company-email` entry with your company email address");
+            }
 
             using (var client = new HttpClient())
             {
-                var userAgent = new ProductInfoHeaderValue("User-Agent", $"QC-SEC-{Guid.NewGuid()}");
-                client.DefaultRequestHeaders.UserAgent.Add(userAgent);
+                var userAgent = string.Join(" ", companyName, companyEmail);
+                client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", userAgent);
                 
                 Directory.CreateDirectory(Path.Combine(rawDestination, "indexes"));
 

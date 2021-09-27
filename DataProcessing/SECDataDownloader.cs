@@ -26,7 +26,6 @@ using QuantConnect.Logging;
 using QuantConnect.Util;
 using System.Globalization;
 using System.Net.Http;
-using System.Net.Http.Headers;
 using System.Threading;
 
 namespace QuantConnect.DataProcessing

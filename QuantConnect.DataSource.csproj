@@ -28,6 +28,9 @@
     <None Remove="SECReportBenchmarkAlgorithm.py" />
     <Compile Remove="SECReportDataAlgorithm.cs" />
     <None Remove="SECReportDataAlgorithm.py" />
+    <Compile Remove="DataProcessing\**" />
+    <EmbeddedResource Remove="DataProcessing\**" />
+    <None Remove="DataProcessing\**" />
   </ItemGroup>
 
   <ItemGroup>

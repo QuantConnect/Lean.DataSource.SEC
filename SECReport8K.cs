@@ -81,7 +81,7 @@ namespace QuantConnect.DataSource
                     Invariant($"{date:yyyyMMdd}_8K.zip#8K.json")
                 ),
                 SubscriptionTransportMedium.LocalFile,
-                FileFormat.Collection
+                FileFormat.UnfoldingCollection
             );
         }
 

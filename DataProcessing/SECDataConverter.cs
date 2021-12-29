@@ -162,7 +162,7 @@ namespace QuantConnect.DataProcessing
             var dataProvider = Composer.Instance.GetExportedValueByTypeName<IDataProvider>(Config.Get("data-provider", "QuantConnect.Lean.Engine.DataFeeds.DefaultDataProvider"));
             var mapFileProvider = Composer.Instance.GetExportedValueByTypeName<IMapFileProvider>(Config.Get("map-file-provider", "LocalDiskMapFileProvider"));
             mapFileProvider.Initialize(dataProvider);
-            _mapFileResolver = mapFileProvider.Get(Market.USA);
+            _mapFileResolver = mapFileProvider.Get(AuxiliaryDataKey.EquityUsa);
         }
 
         /// <summary>

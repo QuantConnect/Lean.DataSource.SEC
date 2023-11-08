@@ -313,9 +313,6 @@ namespace QuantConnect.DataProcessing
                 var cikTickerListPath = Path.Combine(rawDestination, "cik-ticker-mappings.txt");
                 var cikTickerListTempPath = $"{cikTickerListPath}.tmp";
 
-                var cikRankAndFileTickerListPath = Path.Combine(rawDestination, "cik-ticker-mappings-rankandfile.txt");
-                var cikRankAndFileTickerListTempPath = $"{cikRankAndFileTickerListPath}.tmp";
-
                 // Download master list of CIKs from SEC website and store on disk
                 var cikLookupPath = Path.Combine(rawDestination, "cik-lookup-data.txt");
                 var cikLookupTempPath = $"{cikLookupPath}.tmp";
@@ -336,21 +333,6 @@ namespace QuantConnect.DataProcessing
                             File.WriteAllBytes(cikTickerListTempPath, tickerCikMappingsBytes);
                             File.Move(cikTickerListTempPath, cikTickerListPath);
                             File.Delete(cikTickerListTempPath);
-                        }
-
-                        if (!File.Exists(cikRankAndFileTickerListPath))
-                        {
-                            _indexGate.WaitToProceed();
-
-                            Log.Trace(
-                                "SECDataDownloader.Download(): Downloading ticker-CIK mappings list from rankandfile");
-                            var tickerCikMappingsBytes = client
-                                .GetByteArrayAsync("http://rankandfiled.com/static/export/cik_ticker.csv")
-                                .SynchronouslyAwaitTaskResult();
-
-                            File.WriteAllBytes(cikRankAndFileTickerListTempPath, tickerCikMappingsBytes);
-                            File.Move(cikRankAndFileTickerListTempPath, cikRankAndFileTickerListPath);
-                            File.Delete(cikRankAndFileTickerListTempPath);
                         }
 
                         if (!File.Exists(cikLookupPath))

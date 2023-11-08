@@ -31,6 +31,7 @@ using QuantConnect.Data.Auxiliary;
 using QuantConnect.DataSource;
 using QuantConnect.Interfaces;
 using QuantConnect.Logging;
+using QuantConnect.Securities;
 using QuantConnect.Util;
 using Formatting = Newtonsoft.Json.Formatting;
 
@@ -44,7 +45,8 @@ namespace QuantConnect.DataProcessing
     /// </summary>
     public class SECDataConverter
     {
-        private MapFileResolver _mapFileResolver;
+        private readonly MapFileResolver _mapFileResolver;
+        private readonly SecurityDefinitionSymbolResolver _securityDefinitionSymbolResolver;
 
         /// <summary>
         /// Raw data source path
@@ -163,6 +165,18 @@ namespace QuantConnect.DataProcessing
             var mapFileProvider = Composer.Instance.GetExportedValueByTypeName<IMapFileProvider>(Config.Get("map-file-provider", "LocalDiskMapFileProvider"));
             mapFileProvider.Initialize(dataProvider);
             _mapFileResolver = mapFileProvider.Get(AuxiliaryDataKey.EquityUsa);
+
+            _securityDefinitionSymbolResolver = SecurityDefinitionSymbolResolver.GetInstance();
+
+            // Update the hard-coded holidays with dates from the database
+            var marketHoursDatabase = MarketHoursDatabase.FromDataFolder();
+            if (marketHoursDatabase.TryGetEntry(Market.USA, "", SecurityType.Equity, out var entry))
+            {
+                foreach (var holiday in entry.ExchangeHours.Holidays)
+                {
+                    Holidays.Add(holiday);
+                }
+            }
         }
 
         /// <summary>
@@ -194,26 +208,7 @@ namespace QuantConnect.DataProcessing
                 }
             }
 
-            // Merge both data sources to a single CIK -> List{T} of tickers
-            foreach (var line in File.ReadLines(Path.Combine(RawSource, "cik-ticker-mappings-rankandfile.txt")))
-            {
-                var tickerInfo = line.Split('|');
-
-                var companyCik = tickerInfo[0].PadLeft(10, '0');
-                var companyTicker = tickerInfo[1].ToLowerInvariant();
-
-                List<string> symbol;
-                if (!CikTicker.TryGetValue(companyCik, out symbol))
-                {
-                    symbol = new List<string>();
-                    CikTicker[companyCik] = symbol;
-                }
-                // Add null check just in case data comes malformed
-                if (!symbol.Contains(companyTicker) && !string.IsNullOrWhiteSpace(companyTicker))
-                {
-                    symbol.Add(companyTicker);
-                }
-            }
+            Log.Trace($"SECDataConverter.Process(): CIK Ticker Mapping entries: {CikTicker.Count}");
 
             var formattedDate = processingDate.ToStringInvariant(DateFormat.EightCharacter);
             var remoteRawData = new FileInfo(Path.Combine(RawSource, $"{formattedDate}.nc.tar.gz"));
@@ -349,10 +344,17 @@ namespace QuantConnect.DataProcessing
 
                     // Some companies can operate under two tickers, but have the same CIK.
                     // Don't bother continuing if we don't find any tickers for the given CIK
-                    List<string> tickers;
-                    if (!CikTicker.TryGetValue(companyCik, out tickers))
+                    if (!CikTicker.TryGetValue(companyCik, out var tickers))
                     {
-                        return;
+                        tickers = _securityDefinitionSymbolResolver.CIK(companyCik.ToInt32(), processingDate)
+                            .Select(x => x.Value).ToList();
+
+                        if (tickers.Count == 0)
+                        {
+                            return;
+                        }
+
+                        CikTicker[companyCik] = tickers;
                     }
 
                     if (!File.Exists(Path.Combine(RawSource, "indexes", $"{companyCik}.json")))
@@ -407,6 +409,7 @@ namespace QuantConnect.DataProcessing
                 }
             );
 
+            Log.Trace($"SECDataConverter.Process(): Final CIK Ticker Mapping entries: {CikTicker.Count}");
             Log.Trace($"SECDataConverter.Process(): {ncFilesRead} nc files read finished in {(DateTime.Now - startingTime).ToStringInvariant("g")}.");
 
             Parallel.ForEach(

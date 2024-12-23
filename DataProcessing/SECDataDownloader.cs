@@ -27,6 +27,7 @@ using QuantConnect.Util;
 using System.Globalization;
 using System.Net.Http;
 using System.Threading;
+using QuantConnect.Securities;
 
 namespace QuantConnect.DataProcessing
 {
@@ -78,6 +79,7 @@ namespace QuantConnect.DataProcessing
                 throw new ArgumentException("The SEC requires a company email contact to download data using automation. Please edit `config.json` and add a `sec-user-agent-company-email` entry with your company email address");
             }
 
+            var holiday = MarketHoursDatabase.FromDataFolder().GetEntry(Market.USA, (string)null, SecurityType.Equity).ExchangeHours.Holidays;
             using (var client = new HttpClient())
             {
                 var userAgent = string.Join(" ", companyName, companyEmail);
@@ -88,7 +90,7 @@ namespace QuantConnect.DataProcessing
                 for (var currentDate = start; currentDate <= end; currentDate = currentDate.AddDays(1))
                 {
                     // SEC does not publish documents on US federal holidays or weekends
-                    if (!currentDate.IsCommonBusinessDay() || USHoliday.Dates.Contains(currentDate))
+                    if (!currentDate.IsCommonBusinessDay() || holiday.Contains(currentDate))
                     {
                         Log.Trace(
                             $"SECDataDownloader.Download(): Skipping date {currentDate:yyyy-MM-dd} because it was during the weekend or was a holiday");

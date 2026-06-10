@@ -158,8 +158,9 @@ namespace QuantConnect.DataProcessing
                     // We need to escape any nested XML to ensure our deserialization happens smoothly
                     var parsingText = false;
 
-                    // SEC data is line separated by UNIX style line endings. No need to worry about a carriage line here.
-                    foreach (var line in Encoding.UTF8.GetString(rawReportFilePath.Value).Split('\n'))
+                    // SEC data was line separated by UNIX style line endings, but as of June 2026 the feed uses
+                    // carriage returns as line separators, so we split on any line ending convention.
+                    foreach (var line in Encoding.UTF8.GetString(rawReportFilePath.Value).Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None))
                     {
                         var newTextLine = line;
                         var currentTagName = GetTagNameFromLine(newTextLine);
@@ -167,8 +168,8 @@ namespace QuantConnect.DataProcessing
                         // This tag is present rarely in SEC reports, but is unclosed without value when encountered.
                         // Verified by searching with ripgrep for "CONFIRMING-COPY"
                         //
-                        // Sometimes, ASSIGNED-SIC contains no value and causes errors. Check to make sure that when
-                        // we encounter that tag we check if it has a value.
+                        // Sometimes, ASSIGNED-SIC and ORGANIZATION-NAME contain no value and cause errors.
+                        // Check to make sure that when we encounter those tags we check if they have a value.
                         //
                         // "Appearance of the <FLAWED> tag  in
                         //  an EX-27  document header signals unreliable tagging within  the
@@ -177,7 +178,8 @@ namespace QuantConnect.DataProcessing
                         //  because of  allowance in the financial data specifications  for
                         //  omitted tags when the submission also includes a financial  data
                         //  schedule  of article type CT."
-                        if (currentTagName == "CONFIRMING-COPY" || (currentTagName == "ASSIGNED-SIC" && !HasValue(line)) || currentTagName == "FLAWED")
+                        if (currentTagName == "CONFIRMING-COPY" || currentTagName == "FLAWED" ||
+                            ((currentTagName == "ASSIGNED-SIC" || currentTagName == "ORGANIZATION-NAME") && !HasValue(line)))
                         {
                             continue;
                         }

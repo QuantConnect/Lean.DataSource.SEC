@@ -26,6 +26,7 @@ using QuantConnect.Logging;
 using QuantConnect.Util;
 using System.Globalization;
 using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Threading;
 using QuantConnect.Securities;
 
@@ -47,6 +48,16 @@ namespace QuantConnect.DataProcessing
         /// Maximum retries to request for SEC edgar filings
         /// </summary>
         public int MaxRetries = 5;
+
+        /// <summary>
+        /// Bytes requested per ranged call when fetching a feed archive.
+        /// </summary>
+        /// <remarks>
+        /// The SEC drops a transfer once it has been running for a while, so the practical
+        /// limit is time, not size. 100 MB comfortably completes inside that window while
+        /// keeping the number of requests per archive small.
+        /// </remarks>
+        public long ChunkSizeBytes = 100 * 1024 * 1024;
 
         /// <summary>
         /// SEC data downloader constructor
@@ -82,6 +93,11 @@ namespace QuantConnect.DataProcessing
             var holiday = MarketHoursDatabase.FromDataFolder().GetEntry(Market.USA, (string)null, SecurityType.Equity).ExchangeHours.Holidays;
             using (var client = new HttpClient())
             {
+                // The default 100s timeout also covers reading each response body, so at that limit
+                // a 100 MB archive chunk would require a sustained 1 MB/s from the SEC. Leave room
+                // for throttled transfers while still bounding a hung connection.
+                client.Timeout = TimeSpan.FromMinutes(10);
+
                 var userAgent = string.Join(" ", companyName, companyEmail);
                 client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", userAgent);
                 
@@ -104,7 +120,10 @@ namespace QuantConnect.DataProcessing
                         "QTR4";
 
                     var rawFile = Path.Combine(rawDestination, $"{currentDate:yyyyMMdd}.nc.tar.gz");
-                    var tmpFile = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid()}.nc.tar.gz.tmp");
+                    // Deterministic name on the destination volume: retries resume the partial
+                    // instead of starting from zero, the final File.Move is a same-volume rename,
+                    // and failed runs leave no orphaned Guid-named partials in the temp directory.
+                    var tmpFile = $"{rawFile}.tmp";
 
                     // We can access the index files for any given date and filter by form type
                     var dailyIndexTmp = new FileInfo(Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid()}.idx"));
@@ -158,30 +177,30 @@ namespace QuantConnect.DataProcessing
                                 break;
                             }
 
-                            _indexGate.WaitToProceed();
-
                             Log.Trace($"SECDataDownloader.Download(): Downloading temp filing archive to: {tmpFile}");
-                            // *.nc.tar.gz files are massive, potentially causing integer overflow when trying to get
-                            // a byte array back from the HttpClient. Use stream instead to prevent that from happening.
-                            // (Example case: 2021-05-17)
-                            using (var tempFilingArchiveBytes = client.GetStreamAsync($"{BaseUrl}/Feed/{currentDate.Year}/{quarter}/{currentDate:yyyyMMdd}.nc.tar.gz")
-                                .SynchronouslyAwaitTaskResult())
-                            {
-                                using (var tmpFileStream = File.OpenWrite(tmpFile))
-                                {
-                                    tempFilingArchiveBytes.CopyTo(tmpFileStream);
-                                }
-                            }
+                            // *.nc.tar.gz files are massive (multiple GB), so they are fetched in ranged
+                            // chunks rather than as one response: a single request for the whole archive
+                            // outlives what the SEC keeps open and is dropped part-way, leaving a truncated
+                            // file that the size check below discards -- so the day never converts.
+                            // (Example case: 2021-05-17 for the size, 2025-11-06 for the dropped transfer.)
+                            var expectedSizeBytes = DownloadArchive(client,
+                                $"{BaseUrl}/Feed/{currentDate.Year}/{quarter}/{currentDate:yyyyMMdd}.nc.tar.gz",
+                                tmpFile);
 
                             var tmpFileStat = new FileInfo(tmpFile);
                             var tmpFileSizeInKB = tmpFileStat.Length / 1024;
 
-                            // Have max and low be +-1% of the stated file size
-                            if (tmpFileSizeInKB > fileSizeInKB + (fileSizeInKB * 0.01m) ||
-                                tmpFileSizeInKB < fileSizeInKB - (fileSizeInKB * 0.01m))
+                            // The size the server reported while serving the download is authoritative.
+                            // Fall back to index.json only when the server never said one: its sizes go
+                            // stale when the SEC re-generates an archive, so there only a smaller
+                            // download (-1%) indicates truncation.
+                            if (expectedSizeBytes >= 0
+                                ? tmpFileStat.Length != expectedSizeBytes
+                                : tmpFileSizeInKB < fileSizeInKB - (fileSizeInKB * 0.01m))
                             {
+                                var expected = expectedSizeBytes >= 0 ? $"{expectedSizeBytes} bytes" : $"{fileSizeInKB}KB";
                                 Log.Error(
-                                    $"Temporary file is {tmpFileSizeInKB}KB, but is supposed to be {fileSizeInKB}KB. Deleting temp file and retrying...");
+                                    $"Temporary file is {tmpFileStat.Length} bytes, but is supposed to be {expected}. Deleting temp file and retrying...");
                                 tmpFileStat.Delete();
                                 continue;
                             }
@@ -197,7 +216,7 @@ namespace QuantConnect.DataProcessing
                         catch (HttpRequestException err)
                         {
                             Log.Error(
-                                $"SECDataDownloader.Download(): Received status code {(int) err.StatusCode} - Retrying...");
+                                $"SECDataDownloader.Download(): Received status code {StatusOrMessage(err)} - Retrying...");
                         }
                         catch (Exception e)
                         {
@@ -241,7 +260,7 @@ namespace QuantConnect.DataProcessing
                         catch (HttpRequestException err)
                         {
                             Log.Error(
-                                $"SECDataDownloader.Download(): Got error code {(int) err.StatusCode} attempting to download index manifest for date {currentDate:yyyy-MM-dd} - retrying");
+                                $"SECDataDownloader.Download(): Got error code {StatusOrMessage(err)} attempting to download index manifest for date {currentDate:yyyy-MM-dd} - retrying");
                         }
                         catch (Exception e)
                         {
@@ -421,6 +440,160 @@ namespace QuantConnect.DataProcessing
         }
 
         /// <summary>
+        /// Downloads a feed archive to <paramref name="destination"/> using ranged requests.
+        /// </summary>
+        /// <param name="client">HTTP client to download with</param>
+        /// <param name="url">Archive URL to fetch</param>
+        /// <param name="destination">File the archive is written to, resumed if it already exists</param>
+        /// <returns>Size of the archive in bytes as reported by the server, or -1 if it never said</returns>
+        /// <remarks>
+        /// Requesting a multi-GB archive in one call ends in "the response ended prematurely"
+        /// well before the file is complete, and every retry starts again from byte zero, so a
+        /// large day can never land. Ranged requests keep each call short enough to finish, and
+        /// a dropped connection costs only the chunk in flight: the next request resumes from
+        /// the first byte still missing. A short read is therefore not an error -- the loop just
+        /// continues from wherever the response actually stopped.
+        /// </remarks>
+        private long DownloadArchive(HttpClient client, string url, string destination)
+        {
+            long CurrentLength() => File.Exists(destination) ? new FileInfo(destination).Length : 0L;
+
+            // Pick up whatever an earlier attempt already wrote instead of starting over.
+            var position = CurrentLength();
+            var totalLength = -1L;
+            var stalledAttempts = 0;
+            EntityTagHeaderValue etag = null;
+
+            while (totalLength < 0 || position < totalLength)
+            {
+                if (stalledAttempts >= MaxRetries)
+                {
+                    throw new Exception(
+                        $"SECDataDownloader.DownloadArchive(): No progress after {stalledAttempts} attempts at byte {position} of {totalLength} for {url}");
+                }
+
+                _indexGate.WaitToProceed();
+                var previousPosition = position;
+                var wholeBodyDrained = false;
+
+                try
+                {
+                    using var request = new HttpRequestMessage(HttpMethod.Get, url);
+                    request.Headers.Range = new(position, position + ChunkSizeBytes - 1);
+                    if (etag != null)
+                    {
+                        // If the SEC re-generates the archive between chunks the tag no longer
+                        // matches, and the server answers 200 with the new file from byte zero
+                        // instead of splicing bytes of two different generations together.
+                        request.Headers.IfRange = new(etag);
+                    }
+
+                    using var response = client
+                        .SendAsync(request, HttpCompletionOption.ResponseHeadersRead)
+                        .SynchronouslyAwaitTaskResult();
+
+                    if (response.StatusCode == HttpStatusCode.RequestedRangeNotSatisfiable)
+                    {
+                        // The file already covers the requested offset; the 416 carries
+                        // "Content-Range: bytes */<total>", the size this loop was missing.
+                        totalLength = response.Content.Headers.ContentRange?.Length ?? position;
+                        if (position > totalLength)
+                        {
+                            // Longer than the archive itself: a stale partial from a
+                            // re-generated archive, so start over.
+                            File.Delete(destination);
+                        }
+                    }
+                    else
+                    {
+                        response.EnsureSuccessStatusCode();
+
+                        // Content-Range ("bytes <start>-<end>/<total>") is the authoritative size:
+                        // index.json goes stale whenever the SEC re-generates an archive.
+                        var contentRange = response.Content.Headers.ContentRange;
+                        if (contentRange?.Length != null)
+                        {
+                            totalLength = contentRange.Length.Value;
+                        }
+
+                        if (contentRange?.From is { } from && from != position)
+                        {
+                            throw new InvalidOperationException(
+                                $"response starts at byte {from} instead of the requested {position}");
+                        }
+
+                        if (response.StatusCode == HttpStatusCode.OK)
+                        {
+                            // Range was ignored (or If-Range rejected a stale tag) and the whole
+                            // file is coming, so restart the write under the new entity's tag.
+                            totalLength = response.Content.Headers.ContentLength ?? -1L;
+                            etag = response.Headers.ETag;
+                            File.Delete(destination);
+                        }
+                        else
+                        {
+                            etag ??= response.Headers.ETag;
+                        }
+
+                        using var responseStream = response.Content.ReadAsStreamAsync().SynchronouslyAwaitTaskResult();
+                        using var fileStream = new FileStream(destination, FileMode.Append, FileAccess.Write);
+                        responseStream.CopyTo(fileStream);
+                        wholeBodyDrained = response.StatusCode == HttpStatusCode.OK;
+                    }
+                }
+                catch (HttpRequestException e) when (e.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.TooManyRequests)
+                {
+                    // We've been rate limited: back off like the index downloads do
+                    Log.Trace($"SECDataDownloader.DownloadArchive(): Rate limited ({StatusOrMessage(e)}) - retrying in 10s: {url}");
+                    Thread.Sleep(10000);
+                }
+                catch (HttpRequestException e) when (e.StatusCode is { } status
+                    && (int)status is >= 400 and < 500 && status != HttpStatusCode.RequestTimeout)
+                {
+                    // A definite client error, like a 404, cannot heal on retry
+                    throw;
+                }
+                catch (Exception e)
+                {
+                    // Bytes already written stay on disk; only the missing tail is re-requested.
+                    Log.Error($"SECDataDownloader.DownloadArchive(): {e.Message} - resuming {url}");
+                }
+
+                // Trust the file, not the byte count: the stream may have been cut mid-copy.
+                position = CurrentLength();
+                if (wholeBodyDrained && totalLength < 0)
+                {
+                    // A 200 body drained to its end without a Content-Length is the entire
+                    // entity, so what is on disk is the complete archive.
+                    totalLength = position;
+                }
+                if (position > previousPosition)
+                {
+                    // Dropped transfers that still landed bytes never exhaust the retry budget;
+                    // only consecutive attempts with zero progress count against it.
+                    stalledAttempts = 0;
+                }
+                else if (++stalledAttempts < MaxRetries)
+                {
+                    // A stall means the server errored before sending a single byte. Give it
+                    // room to recover instead of burning the whole budget within a second or
+                    // two, since only the 220ms rate gate spaces the attempts otherwise.
+                    Thread.Sleep(10000);
+                }
+            }
+
+            Log.Trace($"SECDataDownloader.DownloadArchive(): Downloaded {position} bytes from {url}");
+            return totalLength;
+        }
+
+        /// <summary>
+        /// Numeric status code of a failed HTTP request for logging; the exception message
+        /// when the failure happened below HTTP (connection reset, TLS drop) and no status exists.
+        /// </summary>
+        private static string StatusOrMessage(HttpRequestException err)
+            => err.StatusCode is { } status ? ((int)status).ToString() : err.Message;
+
+        /// <summary>
         /// Downloads the archive index file
         /// </summary>
         /// <param name="year">Year to download index file for</param>
@@ -446,7 +619,7 @@ namespace QuantConnect.DataProcessing
                 }
                 catch (HttpRequestException err)
                 {
-                    Log.Error($"SECDataDownloader.GetFileSize(): Received status code {(int)err.StatusCode} - Retrying...");
+                    Log.Error($"SECDataDownloader.GetFileSize(): Received status code {StatusOrMessage(err)} - Retrying...");
                 }
                 catch (Exception e)
                 {

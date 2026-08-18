@@ -147,9 +147,17 @@ namespace QuantConnect.DataProcessing
             var startingTime = DateTime.Now;
             var loopStartingTime = startingTime;
             // For the meantime, let's only process .nc files, and deal with correction files later.
+            // Parallelism is configurable to cap peak RAM/CPU; defaults to half the cores.
+            var maxParallelism = Config.GetInt("sec-converter-parallelism", Environment.ProcessorCount / 2);
+            // -1 means unlimited; anything else must be at least 1 or MaxDegreeOfParallelism
+            // throws, e.g. for the ProcessorCount / 2 == 0 default on a single-core host.
+            var parallelOptions = new ParallelOptions
+            {
+                MaxDegreeOfParallelism = maxParallelism == -1 ? -1 : Math.Max(1, maxParallelism)
+            };
             Parallel.ForEach(
                 Compression.UnTar(localRawData.OpenRead(), isTarGz: true).Where(kvp => kvp.Key.EndsWith(".nc")),
-                new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount / 2},
+                parallelOptions,
                 rawReportFilePath =>
                 {
                     var factory = new SECReportFactory();
@@ -159,8 +167,12 @@ namespace QuantConnect.DataProcessing
                     var parsingText = false;
 
                     // SEC data was line separated by UNIX style line endings, but as of June 2026 the feed uses
-                    // carriage returns as line separators, so we split on any line ending convention.
-                    foreach (var line in Encoding.UTF8.GetString(rawReportFilePath.Value).Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None))
+                    // carriage returns as line separators. StreamReader.ReadLine treats \n, \r and \r\n as line
+                    // breaks natively, one line at a time, instead of materializing the whole report as a string
+                    // plus an array of every line -- these run in parallel and reports are tens of MB each.
+                    using var reader = new StreamReader(new MemoryStream(rawReportFilePath.Value), Encoding.UTF8);
+                    string line;
+                    while ((line = reader.ReadLine()) != null)
                     {
                         var newTextLine = line;
                         var currentTagName = GetTagNameFromLine(newTextLine);
@@ -329,6 +341,7 @@ namespace QuantConnect.DataProcessing
 
             Parallel.ForEach(
                 Reports.Keys,
+                parallelOptions,
                 ticker =>
                 {
                     List<ISECReport> reports;

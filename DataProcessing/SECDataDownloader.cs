@@ -323,8 +323,10 @@ namespace QuantConnect.DataProcessing
                             continue;
                         }
 
-                        DownloadIndexFile(client, cik, rawDestination).SynchronouslyAwaitTask();
-                        _downloadedIndexFiles.Add(cik);
+                        if (DownloadIndexFile(client, cik, rawDestination).SynchronouslyAwaitTaskResult())
+                        {
+                            _downloadedIndexFiles.Add(cik);
+                        }
                         previousCik = cik;
                     }
                 }
@@ -389,15 +391,21 @@ namespace QuantConnect.DataProcessing
         /// </summary>
         /// <param name="cik">CIK of the equity</param>
         /// <param name="rawDestination">Destination where we will write to</param>
-        /// <exception cref="Exception">We were unable to download the index file</exception>
-        private async Task DownloadIndexFile(HttpClient client, string cik, string rawDestination)
+        /// <returns>True when the index file was downloaded</returns>
+        /// <remarks>
+        /// A CIK whose index file never arrives is logged and skipped rather than thrown: the
+        /// converter already skips reports without one, while throwing ended the day's download
+        /// before the CIK-ticker mappings, so the converter failed for every filing. EDGAR served
+        /// Weyerhaeuser's index file as a 503 on the 24 Sep 2026 run and a 200 moments later.
+        /// </remarks>
+        private async Task<bool> DownloadIndexFile(HttpClient client, string cik, string rawDestination)
         {
-            for (var i = 0; i < MaxRetries; i++)
+            for (var attempt = 1; attempt <= MaxRetries; attempt++)
             {
                 try
                 {
                     _indexGate.WaitToProceed();
-                    
+
                     var indexFileBytes = await client.GetByteArrayAsync($"{BaseUrl}/data/{cik}/index.json");
                     var indexPathTmp = new FileInfo(Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid()}.json"));
                     var indexPath = new FileInfo(Path.Combine(rawDestination, "indexes", $"{cik}.json"));
@@ -405,20 +413,29 @@ namespace QuantConnect.DataProcessing
                     await File.WriteAllBytesAsync(indexPathTmp.FullName, indexFileBytes);
                     OnIndexFileDownloaded(indexPathTmp, indexPath);
 
-                    return;
+                    return true;
                 }
-                catch (HttpRequestException err)
+                catch (HttpRequestException err) when (err.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.TooManyRequests)
                 {
-                    if (err.StatusCode == HttpStatusCode.Forbidden || err.StatusCode == HttpStatusCode.TooManyRequests)
-                    {
-                        Log.Trace($"SECDataDownloader.DownloadIndexFile(): Rate limited downloading index file for {cik} ({(int)err.StatusCode}) - retrying in 10s");
-                        // We've been rate limited, sleep for 10 seconds then try again
-                        await Task.Delay(TimeSpan.FromSeconds(10));
-                    }
+                    Log.Trace($"SECDataDownloader.DownloadIndexFile(): Rate limited downloading index file for {cik} ({(int)err.StatusCode}) - retrying in 10s");
+                    await Task.Delay(TimeSpan.FromSeconds(10));
+                }
+                catch (Exception err) when (attempt < MaxRetries && SECEdgarClient.IsWorthRetrying(err))
+                {
+                    // Without a pause the whole budget went within one transient 503.
+                    var delay = TimeSpan.FromSeconds(Math.Pow(2, attempt));
+                    Log.Trace($"SECDataDownloader.DownloadIndexFile(): {err.Message} downloading index file for {cik} - retrying in {delay.TotalSeconds}s");
+                    await Task.Delay(delay);
+                }
+                catch (Exception err)
+                {
+                    Log.Error($"SECDataDownloader.DownloadIndexFile(): Skipping index file for {cik}: {err.Message}");
+                    return false;
                 }
             }
 
-            throw new Exception($"Failed to download index file \"{cik}.json\" after {MaxRetries} attempts");
+            Log.Error($"SECDataDownloader.DownloadIndexFile(): Skipping index file for {cik} after {MaxRetries} attempts");
+            return false;
         }
 
         /// <summary>

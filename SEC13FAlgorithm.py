@@ -18,18 +18,11 @@ from QuantConnect.DataSource import *
 class SEC13FAlgorithm(QCAlgorithm):
     '''Example algorithm using the SEC Form 13F institutional holdings dataset as a source of alpha.
     It follows one manager, Pershing Square, through seven of the names it reports: it holds them
-    all when the first quarter arrives, and from then on only those the manager added to.
-
-    The dataset publishes what each manager filed and nothing else, so the change this trades on is
-    worked out here: a point is every position reported for the security on one filing date, the
-    manager's lines are picked out by CIK, and the quarter they describe is period_end.
-
-    The 13F symbols returned by add_data are signals, not tradeable securities, so every name is
-    added twice: once as the tradeable equity and once as the custom data subscribed on it.'''
+    all when the first quarter arrives, and from then on only those the manager added to. No filing
+    states a change, so the comparison between two reported quarters is worked out here.'''
 
     # Pershing Square Capital Management, and Pershing Square Inc., which has reported the same
-    # positions since the June 2026 quarter while the former files only a notice. A manager is
-    # followed by CIK, and a change of reporting entity is a change of CIK.
+    # positions since the June 2026 quarter. A change of reporting entity is a change of CIK.
     MANAGERS = {1336528, 2026053}
 
     def initialize(self) -> None:
@@ -39,12 +32,8 @@ class SEC13FAlgorithm(QCAlgorithm):
         self.set_end_date(2026, 8, 31)
         self.set_cash(100000)
 
-        # The shares the manager reported for each equity, by the quarter they describe.
         self._shares_by_equity = {}
-
-        # The newest quarter the managers have reported, for any name.
         self._latest_period = datetime.min
-
         self._rebalance = False
 
         for ticker in ["META", "UBER", "QSR", "MSFT", "BN", "HTZ", "AMZN"]:
@@ -54,17 +43,15 @@ class SEC13FAlgorithm(QCAlgorithm):
 
     def on_data(self, slice: Slice) -> None:
         for data_symbol, point in slice.get(SEC13FHoldings).items():
-            # The data symbol carries the equity it was subscribed on as its underlying.
-            equity = data_symbol.underlying
-
             # One point per filing date, carrying every position every manager reported for the
-            # security that day. An amendment would restate lines already counted and an option
-            # line states the shares under the contracts, so both are left out of the share count.
+            # security that day. An amendment restates lines already counted and an option line
+            # states the shares under the contracts, so both are left out of the share count.
             for holding in point:
                 if (holding.manager_cik not in self.MANAGERS or holding.form_type != "13F-HR"
                         or holding.amount_type != "SH" or holding.put_call is not None):
                     continue
 
+                equity = data_symbol.underlying
                 shares = self._shares_by_equity[equity]
                 shares[holding.period_end] = shares.get(holding.period_end, 0) + (holding.amount or 0)
                 self._latest_period = max(self._latest_period, holding.period_end)
@@ -81,26 +68,18 @@ class SEC13FAlgorithm(QCAlgorithm):
 
         self._rebalance = False
 
-        # With one quarter known, hold what the manager holds. With two, hold what it added to.
         selected = []
         for equity, shares in self._shares_by_equity.items():
-            periods = sorted(shares)
-            quarters = [shares[period] for period in periods]
-
-            # The manager's trades, which no filing states: the change between two reported quarters.
-            if len(quarters) > 1:
-                # A quarter the manager opened the position in reports no shares before it.
-                change = f" ({quarters[-1] / quarters[-2] - 1:+.1%})" if quarters[-2] > 0 else ""
-                self.log(f"{self.time:%Y-%m-%d} {equity.value}: {quarters[-2]:,.0f} -> {quarters[-1]:,.0f} shares"
-                         f"{change} between {periods[-2]:%Y-%m-%d} and {periods[-1]:%Y-%m-%d}")
+            quarters = [shares[period] for period in sorted(shares)]
 
             # A position sold out of has no line in the new quarter, so its newest period stays
             # behind the newest the manager reported anywhere. Taken for the name's own latest
-            # quarter, it would go on being compared with the quarter before it and held forever.
-            # Not being reported is a report of no shares.
-            if periods and periods[-1] < self._latest_period:
+            # quarter, it would be compared with the quarter before it and held forever. Not
+            # being reported is a report of no shares.
+            if shares and max(shares) < self._latest_period:
                 quarters.append(0)
 
+            # With one quarter known, hold what the manager holds. With two, hold what it added to.
             if quarters and (quarters[0] > 0 if len(quarters) == 1 else quarters[-1] > quarters[-2]):
                 selected.append(equity)
 
@@ -108,7 +87,6 @@ class SEC13FAlgorithm(QCAlgorithm):
             self.liquidate()
             return
 
-        self.log(f"{self.time:%Y-%m-%d} holding {', '.join(equity.value for equity in selected)}")
         self.set_holdings([PortfolioTarget(equity, 1 / len(selected)) for equity in selected],
                           liquidate_existing_holdings=True)
 

@@ -8,7 +8,7 @@ can access the data later in your algorithm.
 class SEC13FDataAlgorithm(QCAlgorithm):
 
     def initialize(self) -> None:
-        # Coverage runs 2013-05-20 to 2026-05-29
+        # Coverage starts 2013-05-20
         self.set_start_date(2020, 10, 1)
         self.set_end_date(2020, 12, 31)
         self.set_cash(100000)
@@ -23,7 +23,7 @@ public class SEC13FDataAlgorithm : QCAlgorithm
 
     public override void Initialize()
     {
-        // Coverage runs 2013-05-20 to 2026-05-29
+        // Coverage starts 2013-05-20
         SetStartDate(2020, 10, 1);
         SetEndDate(2020, 12, 31);
         SetCash(100000);
@@ -38,14 +38,9 @@ public class SEC13FDataAlgorithm : QCAlgorithm
 
 To get the current Form 13F data, index the current [Slice](https://www.quantconnect.com/docs/v2/writing-algorithms/key-concepts/time-modeling/timeslices)
 with the dataset **Symbol**. **Slice** objects deliver unique events to your algorithm as they
-happen, but the **Slice** may not contain data for your dataset at every time step. Positions are
-reported quarterly, but the managers of one quarter file across roughly fifty different days, so
-publication is close to continuous: a widely held name such as AAPL carries filings on 58 of the 66
-weekdays of the fourth quarter of 2020. Check that the **Slice** contains the data you want before
-you index it.
-
-A point is a `SEC13FHoldings` collection holding every position reported for that security on that
-filing date, so iterate it rather than reading a single value off it.
+happen, so check that the **Slice** contains the data you want before you index it. A point is a
+`SEC13FHoldings` collection holding every position reported for that security on that filing date,
+so iterate it rather than reading a single value off it; the collection's own `Value` is zero.
 
 ```python
 def on_data(self, slice: Slice) -> None:
@@ -67,129 +62,63 @@ public override void OnData(Slice slice)
 }
 ```
 
-To iterate through all of the dataset objects in the current **Slice**, call the **Get** method. A
-filing deadline puts thousands of securities into the same day, so this is the usual shape when you
-subscribe to more than one name.
+A point's `Time` is the filing date, not the quarter the position describes. Read `PeriodEnd`
+whenever you need the quarter, because one day of filings can carry several different ones and the
+gap between the two dates runs from zero days to several years.
 
-```python
-def on_data(self, slice: Slice) -> None:
-    for dataset_symbol, holdings in slice.get(SEC13FHoldings).items():
-        for holding in holdings:
-            self.log(f"{dataset_symbol} {holding.manager_cik}: {holding.amount}")
-```
-```csharp
-public override void OnData(Slice slice)
-{
-    foreach (var kvp in slice.Get<SEC13FHoldings>())
-    {
-        var datasetSymbol = kvp.Key;
-        foreach (SEC13FHolding holding in kvp.Value)
-        {
-            Log($"{datasetSymbol} {holding.ManagerCik}: {holding.Amount}");
-        }
-    }
-}
-```
-
-A point's `Time` is the filing date and its `EndTime` is midnight that night. LEAN emits a point at
-its end time, so a day's filings reach your algorithm at 00:00 the following day, after EDGAR has
-finished listing that day at about 22:05 ET, so a backtest never reads a filing before it existed.
-A filing whose EDGAR index came days late is added to history under its filing date.
-
-The filing date is not the quarter the position describes, and the gap between them cannot be
-derived: measured across 11,761 filings in one window it runs minimum 0 days, p10 16, median 42, p90
-48, maximum 6,596, and 10.4 percent of filings arrive later than the 45 day deadline. A point that
-arrives today therefore carries positions from a quarter that ended typically 45 to 135 days ago,
-with late amendments arriving years later, and one day of filings can carry several different
-reported quarters. Read `PeriodEnd` whenever you need the quarter a position describes rather than
-the day it arrived.
-
-### Nothing is aggregated
-
-The dataset publishes what each manager filed. It states no holder count, no total shares and no
-total value, because no 13F filing states any of them. Counting is the algorithm's job and it is a
-few lines:
+The dataset states no holder count, no total shares and no total value, because no 13F filing states
+any of them. Counting is the algorithm's job. To iterate through all of the dataset objects in the
+current **Slice**, call the **Get** method, which is the usual shape once you subscribe to more than
+one name:
 
 ```python
 def on_data(self, slice: Slice) -> None:
     for dataset_symbol, holdings in slice.get(SEC13FHoldings).items():
         managers = {holding.manager_cik for holding in holdings
                     if holding.put_call is None and holding.amount_type == "SH"}
-        shares = sum(holding.amount or 0 for holding in holdings
-                     if holding.put_call is None and holding.amount_type == "SH")
-        self.log(f"{dataset_symbol}: {len(managers)} managers filed, {shares} shares")
+        self.log(f"{dataset_symbol}: {len(managers)} managers filed")
 ```
 ```csharp
 public override void OnData(Slice slice)
 {
     foreach (var kvp in slice.Get<SEC13FHoldings>())
     {
-        var shareLines = kvp.Value.Cast<SEC13FHolding>()
+        var managers = kvp.Value.Cast<SEC13FHolding>()
             .Where(holding => !holding.PutCall.HasValue && holding.AmountType == "SH")
-            .ToList();
-        var managers = shareLines.Select(holding => holding.ManagerCik).Distinct().Count();
-        var shares = shareLines.Sum(holding => holding.Amount.GetValueOrDefault());
-        Log($"{kvp.Key}: {managers} managers filed, {shares} shares");
+            .Select(holding => holding.ManagerCik).Distinct().Count();
+        Log($"{kvp.Key}: {managers} managers filed");
     }
 }
 ```
 
-Two things to know when you count. A manager files once per quarter on a day of its own choosing,
-so breadth builds up across filing dates rather than appearing on any single one: accumulate across
-points instead of reading one day. And a single manager can report the same security on more than
-one line when the investment discretion differs, which the rules allow, so records outnumber
-managers and counting distinct `ManagerCik` is not the same as counting records.
-
-Filter on `AmountType` and `PutCall` before you add anything up. A PRN line is a principal amount of
-debt, not a share count, and an option line states the shares underlying the contracts rather than a
-holding of the security. Adding either into a share total misstates the position.
-
-### Reading the value
+Filter on `AmountType` and `PutCall` first, as that example does: a PRN line is a principal amount
+of debt and an option line states the shares underlying the contracts, so adding either into a share
+total misstates the position. A manager files once per quarter on a day of its own choosing, so
+breadth builds up across filing dates rather than appearing on any single one, and one manager can
+report the same security on several lines when the discretion differs, so distinct `ManagerCik` is
+not the same as records. One that stops appearing has not necessarily sold: a fund whose positions
+move to another reporting entity files a 13F-NT, which carries none, and the new entity reports
+them under its own CIK.
 
 `ReportedValue` is the number the manager wrote, in whatever unit the filing used, and `ValueScale`
-is the power of ten that turns it into dollars: 3 for a filing stating thousands, 0 for one stating
-dollars, and -3 for a line that overstated its value a thousandfold. `MarketValue` applies the scale
-and is what you want in almost every case.
+is the power of ten that turns it into dollars, which `MarketValue` applies for you. A field the
+filing left empty is null, which is not a reported zero, so guard the arithmetic.
 
 ```python
-value = holding.market_value      # dollars
-raw = holding.reported_value      # as filed, with holding.value_scale beside it
-```
-```csharp
-var value = holding.MarketValue;  // dollars
-var raw = holding.ReportedValue;  // as filed, with holding.ValueScale beside it
-```
-
-The collection's own `Value` is zero and carries no meaning: LEAN builds the collection and sets
-only its symbol and timestamps, so there is nothing for a single number to be. Read the records.
-
-### Amendments and confidential filings
-
-`FormType` is 13F-HR for a holdings report and 13F-HR/A for an amendment, with `AmendmentType`
-saying whether the amendment restates the whole report or only adds holdings, and
-`AmendmentNumber` its sequence. An amendment is published beside the filing it restates and
-replaces nothing, so if your strategy wants a restatement to supersede an earlier figure it has to
-apply it. Amendments are rare: 24 of the 1,462 filings carrying positions in the week of 3 August
-2026.
-
-`ConfidentialOmitted` is true when the submission withheld other positions under confidential
-treatment. Such a filing is incomplete by design and the withheld positions surface in a later
-filing, so treat a flagged record as a floor rather than the full picture. `DateReported` carries
-the date a previously confidential filing was originally made, and is null on the roughly 998
-filings in a thousand that were never confidential.
-
-### Empty values
-
-A field the filing left empty is null, and null is different from a reported zero: a manager
-reporting no shared voting authority files a zero, while one that withheld the figure files nothing.
-Guard the arithmetic.
-
-```python
+value = holding.market_value          # dollars
+raw = holding.reported_value          # as filed, with holding.value_scale beside it
 shares = holding.amount or 0
 ```
 ```csharp
+var value = holding.MarketValue;      // dollars
+var raw = holding.ReportedValue;      // as filed, with holding.ValueScale beside it
 var shares = holding.Amount.GetValueOrDefault();
 ```
+
+An amendment, which `FormType` marks 13F-HR/A, is published beside the filing it amends and
+replaces nothing. `AmendmentType` says which kind it is: `RESTATEMENT` replaces the original
+filing, `NEW HOLDINGS` only adds to it, and applying either is the algorithm's job. `ConfidentialOmitted` marks a submission that withheld other positions under confidential
+treatment, which makes that record a floor rather than the full picture.
 
 ## Historical Data
 
@@ -200,44 +129,28 @@ dataset **Symbol**. If there is no data in the period you request, the history r
 # pandas Series, one entry per filing date, each holding the list of that day's positions
 history_series = self.history(self._dataset_symbol, timedelta(days=60), Resolution.DAILY)
 
-# DataFrame, one row per reported position
+# DataFrame, one row per reported position, columns named after the record's fields in lower case
 history_df = self.history(SEC13FHoldings, self._dataset_symbol, timedelta(days=60), Resolution.DAILY, flatten=True)
 
-# Dataset objects, one per filing date
+# SEC13FHoldings objects, one per filing date, each carrying its records
 history_bars = self.history[SEC13FHoldings](self._dataset_symbol, timedelta(days=60), Resolution.DAILY)
 ```
 ```csharp
 var history = History<SEC13FHoldings>(_datasetSymbol, TimeSpan.FromDays(60), Resolution.Daily);
 ```
 
-The three shapes differ more than usual for this dataset, because a point is a collection.
-
-Without `flatten`, Python gives you a **Series** and not a DataFrame: one entry per filing date,
-indexed by symbol and time, each entry holding the list of that day's positions. Reading a column
-off it will not work, because it has none.
-
-With `flatten=True` you get a DataFrame with **one row per reported position**, indexed by time and
-symbol, whose columns are the record's fields in lower case: `accessionnumber`, `managercik`,
-`managername`, `periodend`, `formtype`, `amendmenttype`, `amendmentnumber`, `titleofclass`,
-`amount`, `amounttype`, `reportedvalue`, `valuescale`, `marketvalue`, `putcall`, `investmentdiscretion`, `othermanager`,
-`votingsole`, `votingshared`, `votingnone`, `confidentialomitted`, `datereported`. This is the form
-to use for anything cross-sectional. Sixty days of AAPL history is one Series of 39 entries or a
-DataFrame of 6,333 rows, which is the difference the flag makes.
-
-Note that a reported zero occasionally comes back as `NaN` in the flattened frame rather than as
-`0`, which is LEAN's pandas conversion rather than a gap in the data. Treat the two alike:
-
-```python
-shares = history_df["votingshared"].fillna(0)
-```
-
-The typed history and the C# history give you the `SEC13FHoldings` objects themselves, one per
-filing date, each carrying its records. That is the form that keeps the day's positions grouped.
+The three shapes differ more than usual for this dataset, because a point is a collection. Without
+`flatten`, Python gives you a **Series** and not a DataFrame, so reading a column off it will not
+work. With `flatten=True` you get one row per reported position, which is the form to use for
+anything cross-sectional: sixty days of AAPL history read at the start of the fourth quarter of
+2020 is one Series of 36 entries or a DataFrame of 4,144 rows. A reported zero occasionally comes
+back there as `NaN` rather than as `0`, which is LEAN's pandas conversion rather than a gap in the
+data, so treat the two alike with `history_df["votingshared"].fillna(0)`.
 
 Ask for a time span rather than a bar count. A bar count is read in daily bars and the dataset
-publishes on filing dates only, so what comes back depends on how widely the security is held rather
-than on the count you asked for. AAPL carries filings on 58 of the 66 weekdays of the fourth quarter
-of 2020, while a thinly held name carries them on a handful of days a year.
+publishes on filing dates only, so what comes back depends on how widely the security is held
+rather than on the count you asked for. AAPL carries filings on 58 of the 66 weekdays of the fourth
+quarter of 2020, while a thinly held name carries them on a handful of days a year.
 
 For more information about historical data, see [History Requests](https://www.quantconnect.com/docs/v2/writing-algorithms/historical-data/history-requests).
 

@@ -103,6 +103,14 @@ namespace QuantConnect.DataProcessing
                 
                 Directory.CreateDirectory(Path.Combine(rawDestination, "indexes"));
 
+                // Fetched first, since the converter cannot run without the mappings, and a day
+                // whose download fails part way must not leave them missing. Neither list is
+                // complete: they do not contain all historical tickers.
+                DownloadLookupFile(client, "https://www.sec.gov/include/ticker.txt",
+                    Path.Combine(rawDestination, "cik-ticker-mappings.txt"));
+                DownloadLookupFile(client, $"{BaseUrl}/cik-lookup-data.txt",
+                    Path.Combine(rawDestination, "cik-lookup-data.txt"));
+
                 for (var currentDate = start; currentDate <= end; currentDate = currentDate.AddDays(1))
                 {
                     // SEC does not publish documents on US federal holidays or weekends
@@ -323,62 +331,57 @@ namespace QuantConnect.DataProcessing
                             continue;
                         }
 
-                        DownloadIndexFile(client, cik, rawDestination).SynchronouslyAwaitTask();
-                        _downloadedIndexFiles.Add(cik);
+                        if (DownloadIndexFile(client, cik, rawDestination).SynchronouslyAwaitTaskResult())
+                        {
+                            _downloadedIndexFiles.Add(cik);
+                        }
                         previousCik = cik;
                     }
                 }
+            }
+        }
 
-                // Download list of Ticker to CIK mappings from SEC website. Note that this list
-                // is not complete and does not contain all historical tickers.
-                var cikTickerListPath = Path.Combine(rawDestination, "cik-ticker-mappings.txt");
-                var cikTickerListTempPath = $"{cikTickerListPath}.tmp";
+        /// <summary>
+        /// Downloads a lookup list to <paramref name="path"/> unless an earlier run already did
+        /// </summary>
+        /// <param name="client">HTTP client to download with</param>
+        /// <param name="url">URL of the list</param>
+        /// <param name="path">File the list is written to</param>
+        /// <exception cref="Exception">The list could not be downloaded</exception>
+        /// <remarks>
+        /// ticker.txt answered 503 on about half the requests on 25 Sep 2026, each after some
+        /// ten seconds, so a failure is retried with a backoff rather than at once.
+        /// </remarks>
+        private void DownloadLookupFile(HttpClient client, string url, string path)
+        {
+            if (File.Exists(path))
+            {
+                return;
+            }
 
-                // Download master list of CIKs from SEC website and store on disk
-                var cikLookupPath = Path.Combine(rawDestination, "cik-lookup-data.txt");
-                var cikLookupTempPath = $"{cikLookupPath}.tmp";
-
-                for (var i = 0; i < MaxRetries; i++)
+            var tempPath = $"{path}.tmp";
+            for (var attempt = 1; ; attempt++)
+            {
+                try
                 {
-                    try
-                    {
-                        if (!File.Exists(cikTickerListPath))
-                        {
-                            _indexGate.WaitToProceed();
+                    _indexGate.WaitToProceed();
 
-                            Log.Trace("SECDataDownloader.Download(): Downloading ticker-CIK mappings list");
-                            var tickerCikMappingsBytes = client
-                                .GetByteArrayAsync("https://www.sec.gov/include/ticker.txt")
-                                .SynchronouslyAwaitTaskResult();
-
-                            File.WriteAllBytes(cikTickerListTempPath, tickerCikMappingsBytes);
-                            File.Move(cikTickerListTempPath, cikTickerListPath);
-                            File.Delete(cikTickerListTempPath);
-                        }
-
-                        if (!File.Exists(cikLookupPath))
-                        {
-                            _indexGate.WaitToProceed();
-
-                            Log.Trace("SECDataDownloader.Download(): Downloading CIK lookup data");
-                            var cikLookupBytes = client.GetByteArrayAsync($"{BaseUrl}/cik-lookup-data.txt")
-                                .SynchronouslyAwaitTaskResult();
-
-                            File.WriteAllBytes(cikLookupTempPath, cikLookupBytes);
-                            File.Move(cikLookupTempPath, cikLookupPath);
-                            File.Delete(cikLookupTempPath);
-                        }
-                    }
-                    catch (HttpRequestException err)
-                    {
-                        if (err.StatusCode == HttpStatusCode.Forbidden ||
-                            err.StatusCode == HttpStatusCode.TooManyRequests)
-                        {
-                            Log.Trace(
-                                $"SECDataDownloader.Download(): Rate limited downloading CIK-ticker mappings - retrying in 10s");
-                            Thread.Sleep(10000);
-                        }
-                    }
+                    Log.Trace($"SECDataDownloader.DownloadLookupFile(): Downloading {url}");
+                    File.WriteAllBytes(tempPath, client.GetByteArrayAsync(url).SynchronouslyAwaitTaskResult());
+                    File.Move(tempPath, path, true);
+                    return;
+                }
+                catch (Exception err) when (attempt < MaxRetries && SECEdgarClient.IsWorthRetrying(err))
+                {
+                    var delay = err is HttpRequestException { StatusCode: HttpStatusCode.TooManyRequests }
+                        ? TimeSpan.FromSeconds(10)
+                        : TimeSpan.FromSeconds(Math.Pow(2, attempt));
+                    Log.Trace($"SECDataDownloader.DownloadLookupFile(): {err.Message} downloading {url} - retrying in {delay.TotalSeconds}s");
+                    Thread.Sleep(delay);
+                }
+                catch (Exception err)
+                {
+                    throw new Exception($"Failed to download {url} after {attempt} attempts", err);
                 }
             }
         }
@@ -389,15 +392,21 @@ namespace QuantConnect.DataProcessing
         /// </summary>
         /// <param name="cik">CIK of the equity</param>
         /// <param name="rawDestination">Destination where we will write to</param>
-        /// <exception cref="Exception">We were unable to download the index file</exception>
-        private async Task DownloadIndexFile(HttpClient client, string cik, string rawDestination)
+        /// <returns>True when the index file was downloaded</returns>
+        /// <remarks>
+        /// A CIK whose index file never arrives is logged and skipped rather than thrown: the
+        /// converter already skips reports without one, while throwing ended the day's download
+        /// before the CIK-ticker mappings, so the converter failed for every filing. EDGAR served
+        /// Weyerhaeuser's index file as a 503 on the 24 Sep 2026 run and a 200 moments later.
+        /// </remarks>
+        private async Task<bool> DownloadIndexFile(HttpClient client, string cik, string rawDestination)
         {
-            for (var i = 0; i < MaxRetries; i++)
+            for (var attempt = 1; attempt <= MaxRetries; attempt++)
             {
                 try
                 {
                     _indexGate.WaitToProceed();
-                    
+
                     var indexFileBytes = await client.GetByteArrayAsync($"{BaseUrl}/data/{cik}/index.json");
                     var indexPathTmp = new FileInfo(Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid()}.json"));
                     var indexPath = new FileInfo(Path.Combine(rawDestination, "indexes", $"{cik}.json"));
@@ -405,20 +414,29 @@ namespace QuantConnect.DataProcessing
                     await File.WriteAllBytesAsync(indexPathTmp.FullName, indexFileBytes);
                     OnIndexFileDownloaded(indexPathTmp, indexPath);
 
-                    return;
+                    return true;
                 }
-                catch (HttpRequestException err)
+                catch (HttpRequestException err) when (err.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.TooManyRequests)
                 {
-                    if (err.StatusCode == HttpStatusCode.Forbidden || err.StatusCode == HttpStatusCode.TooManyRequests)
-                    {
-                        Log.Trace($"SECDataDownloader.DownloadIndexFile(): Rate limited downloading index file for {cik} ({(int)err.StatusCode}) - retrying in 10s");
-                        // We've been rate limited, sleep for 10 seconds then try again
-                        await Task.Delay(TimeSpan.FromSeconds(10));
-                    }
+                    Log.Trace($"SECDataDownloader.DownloadIndexFile(): Rate limited downloading index file for {cik} ({(int)err.StatusCode}) - retrying in 10s");
+                    await Task.Delay(TimeSpan.FromSeconds(10));
+                }
+                catch (Exception err) when (attempt < MaxRetries && SECEdgarClient.IsWorthRetrying(err))
+                {
+                    // Without a pause the whole budget went within one transient 503.
+                    var delay = TimeSpan.FromSeconds(Math.Pow(2, attempt));
+                    Log.Trace($"SECDataDownloader.DownloadIndexFile(): {err.Message} downloading index file for {cik} - retrying in {delay.TotalSeconds}s");
+                    await Task.Delay(delay);
+                }
+                catch (Exception err)
+                {
+                    Log.Error($"SECDataDownloader.DownloadIndexFile(): Skipping index file for {cik}: {err.Message}");
+                    return false;
                 }
             }
 
-            throw new Exception($"Failed to download index file \"{cik}.json\" after {MaxRetries} attempts");
+            Log.Error($"SECDataDownloader.DownloadIndexFile(): Skipping index file for {cik} after {MaxRetries} attempts");
+            return false;
         }
 
         /// <summary>

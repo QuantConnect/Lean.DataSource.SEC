@@ -1,41 +1,22 @@
 ## Introduction
 
-SEC Whales is the ownership side of the SEC's filings: who holds what, reported by the holders
-themselves. It collects those disclosures one source at a time and publishes each filing as it was
-made. It ships today with Form 13F institutional holdings, which every manager exercising
-discretion over at least 100 million dollars must file within 45 days of the end of a calendar
-quarter, from the second quarter of 2013 to the present.
+The US SEC 13F Whales dataset by the US Securities and Exchange Commission (SEC) tracks the holdings of institutional investment managers with at least $100 million in assets under management. The data covers 18,877 US Equities, starts in May 2013, and is delivered on a daily frequency. This dataset is created by parsing Form 13F filings.
 
-Nothing is summed, counted or averaged. The holders of a name, the shares institutions hold between
-them, quarter over quarter change and concentration are all derivable from a day's records, and no
-filing states any of them, so they are left to the algorithm rather than invented here.
-
-The reporting lag is the product, not an inconvenience to be hidden. A position is typically 45 to
-135 days old when it reaches the public record, late amendments arrive years later, and 10.4
-percent of filings miss the deadline, so a record is stamped with the date it was filed and carries
-the quarter it describes in `PeriodEnd`. Delivering it on that quarter end would inject every day
-of the gap as look-ahead.
-
-An algorithm receives one `SEC13FHoldings` point per security per filing date, holding every
-position reported for that security that day. Several managers file on the same day, and one
-manager can report the same security on more than one line when the investment discretion differs,
-which Berkshire Hathaway does with Moody's. Those records stay apart.
+This dataset depends on the [US Equity Security Master](https://www.quantconnect.com/datasets/quantconnect-us-equity-security-master) dataset because the US Equity Security Master dataset contains information on splits, dividends, and symbol changes.
 
 ## About the Provider
 
-The [U.S. Securities and Exchange Commission](https://www.sec.gov) is the federal agency that
-regulates the US securities markets. Form 13F is filed through EDGAR, the SEC's electronic filing
-system, and the agency republishes those filings as structured, tab separated data sets in three
-month batches. The history is built from those data sets, and the daily job reads each day's
-filings from EDGAR itself, because a batch arrives up to three months after its first filing. The
-data is public domain and needs no account and no API key.
+The mission of the U.S. Securities and Exchange Commission is to protect investors, maintain fair, orderly, and efficient markets, and facilitate capital formation. The SEC oversees the key participants in the securities world, including securities exchanges, securities brokers and dealers, investment advisors, and mutual funds. The SEC is concerned primarily with promoting the disclosure of important market-related information, maintaining fair dealing, and protecting against fraud.
 
 ## Getting Started
+
+The following snippet demonstrates how to request data from the SEC Whales dataset:
 
 ```python
 self._symbol = self.add_equity("AAPL", Resolution.DAILY).symbol
 self._holdings_symbol = self.add_data(SEC13FHoldings, self._symbol).symbol
 ```
+
 ```csharp
 _symbol = AddEquity("AAPL", Resolution.Daily).Symbol;
 _holdingsSymbol = AddData<SEC13FHoldings>(_symbol).Symbol;
@@ -48,34 +29,79 @@ The following table describes the dataset properties:
 | Property | Value |
 | --- | --- |
 | Start Date | May 2013 |
-| Asset Coverage\* | 18,877 US Equities |
+| Asset Coverage* | 18,877 US Equities |
 | Data Density | Sparse |
-| Resolution\*\* | Daily |
-| Timezone | America/New_York |
+| Resolution | Daily |
+| Timezone | New York |
 
-\* The coverage includes all assets since the start date. It increases over time. Positions are
-reported by CUSIP, which is licensed and not published, and resolve to a LEAN `Symbol` for 97.0
-percent of the lines of one recent week and 95.0 percent of the fourth quarter of 2020; the
-crosswalk that reaches the hardest names begins in late 2019, so a security delisted before then
-is the likeliest to be missing.
-
-\*\* Positions are reported quarterly, but the managers of one quarter file across roughly fifty
-different days and several quarters are live at once, so publication is close to continuous.
+\* The coverage includes all assets since the start date. It increases over time.
 
 ## Example Applications
 
-SEC Whales lets you see what large holders actually hold and trade against how crowded a name is.
-Examples include the following strategies:
+The US SEC 13F Whales dataset enables you to follow what large institutional investors hold and how their positions change. Examples include the following strategies:
 
-- Screening for crowding by counting the distinct managers reporting each security, and for
-  de-crowding by taking the securities whose count fell hardest against the previous quarter.
-- Building an ownership change momentum signal from the quarter over quarter move in reported
-  shares, and going long the names institutions are accumulating.
-- Following one manager through `ManagerCik`, reading what a single fund reported quarter after
-  quarter rather than what the market did in aggregate, which is what the demonstration algorithms
-  do with Pershing Square.
-- Reading the reported put and call lines alongside the share positions to see whether managers are
-  hedging a name rather than simply owning it.
+- Following the quarterly positions of specific fund managers on the premise that they are more informed
+- Buying the securities that institutions are accumulating and selling the ones they are reducing
+- Avoiding crowded securities that many managers hold at the same time
+
+For more example algorithms, see [Examples](/datasets/sec-whales/examples).
+
+## Supported Managers
+
+To follow a manager, filter the holdings by its CIK with the **ManagerCik** property. The following table shows the 50 largest managers by reported value in the second quarter of 2026:
+
+| CIK | Manager |
+| --- | --- |
+| 2012383 | BlackRock Inc. |
+| 2100119 | VANGUARD CAPITAL MANAGEMENT LLC |
+| 93751 | STATE STREET CORP |
+| 315066 | FMR LLC |
+| 2100121 | VANGUARD PORTFOLIO MANAGEMENT LLC |
+| 895421 | MORGAN STANLEY |
+| 1214717 | GEODE CAPITAL MANAGEMENT LLC |
+| 19617 | JPMORGAN CHASE & CO |
+| 70858 | BANK OF AMERICA CORP /DE/ |
+| 914208 | Invesco Ltd. |
+| 1374170 | NORGES BANK |
+| 80255 | PRICE T ROWE ASSOCIATES INC /MD/ |
+| 886982 | GOLDMAN SACHS GROUP INC |
+| 73124 | NORTHERN TRUST CORP |
+| 1422849 | Capital World Investors |
+| 884546 | CHARLES SCHWAB INVESTMENT MANAGEMENT INC |
+| 1422848 | Capital Research Global Investors |
+| 1610520 | UBS Group AG |
+| 1390777 | Bank of New York Mellon Corp |
+| 1000275 | ROYAL BANK OF CANADA |
+| 902219 | WELLINGTON MANAGEMENT GROUP LLP |
+| 72971 | WELLS FARGO & COMPANY/MN |
+| 354204 | DIMENSIONAL FUND ADVISORS LP |
+| 861177 | UBS AM a distinct business unit of UBS ASSET MANAGEMENT AMERICAS LLC |
+| 820027 | AMERIPRISE FINANCIAL INC |
+| 1562230 | Capital International Investors |
+| 764068 | Legal & General Group Plc |
+| 38777 | FRANKLIN RESOURCES INC |
+| 933478 | VANGUARD FIDUCIARY TRUST CO |
+| 1403438 | LPL Financial LLC |
+| 1407543 | ENVESTNET ASSET MANAGEMENT INC |
+| 1871926 | Nuveen LLC |
+| 1330387 | Amundi |
+| 720005 | RAYMOND JAMES FINANCIAL INC |
+| 948046 | DEUTSCHE BANK AG |
+| 850529 | Fisher Asset Management LLC |
+| 312069 | BARCLAYS PLC |
+| 912938 | MASSACHUSETTS FINANCIAL SERVICES CO /MA/ |
+| 1109448 | ALLIANCEBERNSTEIN L.P. |
+| 1067983 | Berkshire Hathaway Inc |
+| 1167557 | AQR CAPITAL MANAGEMENT LLC |
+| 927971 | BANK OF MONTREAL /CAN/ |
+| 815917 | JONES FINANCIAL COMPANIES LLLP |
+| 2146052 | Jupiter Topco LLC |
+| 748054 | AMERICAN CENTURY COMPANIES INC |
+| 1164508 | ARROWSTREET CAPITAL LIMITED PARTNERSHIP |
+| 1811242 | Vanguard Global Advisers LLC |
+| 831001 | CITIGROUP INC |
+| 873630 | HSBC HOLDINGS PLC |
+| 1126328 | PRINCIPAL FINANCIAL GROUP INC |
 
 ## Meta
 

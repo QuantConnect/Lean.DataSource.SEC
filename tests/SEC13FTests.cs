@@ -389,8 +389,8 @@ namespace QuantConnect.DataLibrary.Tests
         [Test]
         public void CloneCopiesEveryProperty()
         {
-            // Published later than the day after its filing, so Time and FilingDate differ and a
-            // copy that swapped them would show.
+            // Published later than the day after its filing, so EndTime does not follow from Time
+            // and a copy that dropped it would show.
             var original = Read(FullLine, entry: new DateTime(2026, 8, 20));
             var clone = (SEC13FHolding)original.Clone();
 
@@ -442,8 +442,8 @@ namespace QuantConnect.DataLibrary.Tests
         {
             // Compared by reflection rather than field by field, so a property added later is
             // covered without anyone remembering to extend this test.
-            // Published later than the day after its filing, so Time and FilingDate differ and a
-            // copy that swapped them would show.
+            // Published later than the day after its filing, so EndTime does not follow from Time
+            // and a round trip that dropped it would show.
             var original = Read(FullLine, entry: new DateTime(2026, 8, 20));
             var restored = JsonConvert.DeserializeObject<SEC13FHolding>(JsonConvert.SerializeObject(original));
 

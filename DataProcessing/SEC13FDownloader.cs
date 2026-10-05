@@ -37,8 +37,8 @@ using QuantConnect.Util;
 namespace QuantConnect.DataProcessing
 {
     /// <summary>
-    /// Converts Form 13F filings into LEAN's per-security zips, one entry per filing
-    /// date. Without QC_DATAFLEET_DEPLOYMENT_DATE it rebuilds the whole history, from the SEC's
+    /// Converts Form 13F filings into LEAN's per-security zips, one entry per publication
+    /// day. Without QC_DATAFLEET_DEPLOYMENT_DATE it rebuilds the whole history, from the SEC's
     /// structured data sets through the last window published and from EDGAR's daily indexes after
     /// it; with it, it reads that day from EDGAR, with any recent day whose index came late, and
     /// folds them into the published history.
@@ -71,9 +71,10 @@ namespace QuantConnect.DataProcessing
         private const string NoticeSubmissionTypePrefix = "13F-NT";
 
         // EDGAR lists a day's filings in its daily index at about 22:05 ET (02:02 to 02:07 UTC the
-        // next morning over six business days measured in September 2026). The daily job reads that
-        // index at 01:00 ET the next day with a one hour timeout (schedule "0 1 * * 2-6", Date
-        // Offset 1), which is why a point ends at midnight after its FILING_DATE and no earlier.
+        // next morning over six business days measured in September 2026). A run publishes what it
+        // reads under the day after its deployment date, which a backtest hands over at midnight, so
+        // the job belongs between the index and midnight: a run that finishes later shows its rows
+        // to a backtest that much before the job had them.
 
         /// <summary>Config key that starts the rebuild's EDGAR days on this yyyyMMdd instead of after the last data set.</summary>
         internal const string EdgarFromKey = "sec-13f-edgar-from";
@@ -186,7 +187,7 @@ namespace QuantConnect.DataProcessing
         /// <summary>
         /// Rows waiting to be staged, flushed per archive. Keyed by security, because several CUSIPs
         /// can reach one security and their lines all belong in its file. Each row keeps the ticker
-        /// of its filing date, which is the file it lands in.
+        /// in force on the day it is published, which is the file it lands in.
         /// </summary>
         private readonly Dictionary<string, List<(string Ticker, HoldingsRow Row)>>
             _pendingSecurityRows = new(StringComparer.Ordinal);
@@ -2036,7 +2037,7 @@ namespace QuantConnect.DataProcessing
 
         /// <summary>
         /// Appends the archive's rows to the staging file of their security; the grouping into files
-        /// per ticker and filing date happens once, in the finalize pass.
+        /// per ticker and publication day happens once, in the finalize pass.
         /// </summary>
         internal void FlushPendingRows()
         {
@@ -2137,7 +2138,7 @@ namespace QuantConnect.DataProcessing
         /// <summary>
         /// Writes one security's publication days as an entry per day inside its zip.
         ///
-        /// A zip rather than a directory of loose files because a filing date holds three lines at
+        /// A zip rather than a directory of loose files because a day holds three lines at
         /// the median and one line a third of the time: as loose files the history would be eight
         /// and a half million of them, whose tar headers alone outweigh the data.
         /// </summary>

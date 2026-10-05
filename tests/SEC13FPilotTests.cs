@@ -234,7 +234,7 @@ namespace QuantConnect.DataLibrary.Tests
             var managers = Path.Combine(folder, "managers.csv");
 
             TestContext.Out.WriteLine($"securities            {zips.Length}");
-            TestContext.Out.WriteLine($"filing dates written  {days}");
+            TestContext.Out.WriteLine($"publication days written  {days}");
             TestContext.Out.WriteLine($"reported positions    {rows}");
             TestContext.Out.WriteLine($"bytes on disk         {bytes:N0} ({bytes / 1024d / 1024d:F1} MB)");
             TestContext.Out.WriteLine($"bytes per position    {(rows == 0 ? 0 : bytes / rows)}");

@@ -39,7 +39,7 @@ The 13F run depends on three things in the LEAN data folder, none of which it do
 
 | Data | Path under the data folder | Used for |
 |---|---|---|
-| Map files | `equity/usa/map_files/map_files_<yyyyMMdd>.zip` | The ticker a security traded under on a filing date, which names its file. The zip is required: the run fails without one |
+| Map files | `equity/usa/map_files/map_files_<yyyyMMdd>.zip` | The ticker a security trades under on the day a row is published, which names its file. The zip is required: the run fails without one |
 | Security database | `symbol-properties/security-database.csv` | Resolving a reported CUSIP, and the ISIN built from it, to a security. Without it only the N-PORT crosswalk resolves anything, and coverage falls from about 98 to 88 percent of reported value |
 | Coarse universe files | `equity/usa/fundamental/coarse/<yyyyMMdd>.csv` | The close of each quarter's last trading day, from 2012. It decides whether a filing states values in dollars or thousands, vets the N-PORT crosswalk matches, and picks the fund an option on a fund family is written on. Only the quarter-end days are read, up to seven days back. Without them the run logs an error and falls back to the SEC's unit rule for the filing date |
 

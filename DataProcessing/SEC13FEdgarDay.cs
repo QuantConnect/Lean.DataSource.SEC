@@ -32,10 +32,10 @@ namespace QuantConnect.DataProcessing
     ///
     /// The data sets come out in three month batches a few days after each window closes. A daily
     /// job waiting for them publishes a filing up to three months after it was public, while a
-    /// backtest sees it the day after it was filed. EDGAR lists each day's
-    /// filings in its daily index that night, and their information tables carry the lines the data
-    /// sets do: 48 of 48 filings compared line by line, and the same accession numbers on six sample
-    /// days, so reading EDGAR is what lets the live job publish on the date the history uses.
+    /// backtest sees it the day after it was filed. EDGAR lists each day's filings in its daily
+    /// index that night, and their information tables carry the lines the data sets do: 48 of 48
+    /// filings compared line by line, and the same accession numbers on six sample days, so reading
+    /// EDGAR is what lets the live job publish on the date the history uses.
     /// </summary>
     internal static class SEC13FEdgarDay
     {

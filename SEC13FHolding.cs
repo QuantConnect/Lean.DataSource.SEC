@@ -62,10 +62,9 @@ namespace QuantConnect.DataSource
 
         /// <summary>
         /// The date the SEC received the submission, as the daily EDGAR index lists it. The record
-        /// reaches algorithms later, once the daily job has read that index, so Time is the day it
-        /// became available and not this date.
+        /// reaches algorithms later, at EndTime, once the daily job has read that index.
         /// </summary>
-        public DateTime FilingDate { get; set; }
+        public DateTime FilingDate => Time;
 
         /// <summary>
         /// Central Index Key of the manager that filed the submission. It is the stable identity of
@@ -210,7 +209,13 @@ namespace QuantConnect.DataSource
         /// in a backtest and live alike: EDGAR lists a day's filings at about 22:00 ET, the daily job
         /// reads them after that, and they arrive together at 00:00 of the day it publishes them.
         /// </summary>
-        public override DateTime EndTime => Time.AddDays(1);
+        public override DateTime EndTime
+        {
+            get => _endTime ?? Time.AddDays(1);
+            set => _endTime = value;
+        }
+
+        private DateTime? _endTime;
 
         /// <summary>Name of the dataset's folder under alternative/sec/, which is where its files live.</summary>
         public static string ReportFolder => "13f";
@@ -259,8 +264,7 @@ namespace QuantConnect.DataSource
             }
 
             var point = Parse(csv);
-            // The entry is named after the day the record became available, and the point ends then.
-            point.Time = date.AddDays(-1);
+            point.EndTime = date;
             point.Symbol = config.Symbol;
             point.ManagerName = SEC13FManagerNameProvider.GetName(point.ManagerCik);
             return point;
@@ -272,7 +276,6 @@ namespace QuantConnect.DataSource
             var point = new SEC13FHolding
             {
                 Time = DateTime.ParseExact(csv[0], FilingDateFormat, CultureInfo.InvariantCulture),
-                FilingDate = DateTime.ParseExact(csv[0], FilingDateFormat, CultureInfo.InvariantCulture),
                 AccessionNumber = csv[1],
                 ManagerCik = int.Parse(csv[2], NumberStyles.Integer, CultureInfo.InvariantCulture),
                 PeriodEnd = DateTime.ParseExact(csv[3], FilingDateFormat, CultureInfo.InvariantCulture),
@@ -351,8 +354,8 @@ namespace QuantConnect.DataSource
             {
                 Symbol = Symbol,
                 Time = Time,
+                EndTime = EndTime,
                 Value = Value,
-                FilingDate = FilingDate,
                 AccessionNumber = AccessionNumber,
                 ManagerCik = ManagerCik,
                 ManagerName = ManagerName,

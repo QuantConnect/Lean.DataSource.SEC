@@ -2034,7 +2034,7 @@ namespace QuantConnect.DataProcessing
         }
 
         /// <summary>
-        /// Gathers the staged rows into their ticker's zip, one entry per filing date. An incremental
+        /// Gathers the staged rows into their ticker's zip, one entry per publication day. An incremental
         /// run adds its dates to a copy of the published zip.
         /// </summary>
         internal void FinalizeSecurityFiles()
@@ -2075,7 +2075,7 @@ namespace QuantConnect.DataProcessing
             {
                 var ticker = Path.GetFileNameWithoutExtension(file);
                 var days = ReadRows(file)
-                    .GroupBy(row => row.Time)
+                    .GroupBy(row => PublishedOn(row.Time))
                     .OrderBy(day => day.Key)
                     .ToList();
 
@@ -2085,14 +2085,29 @@ namespace QuantConnect.DataProcessing
             }
 
             Log.Trace($"SEC13FDownloader.FinalizeSecurityFiles(): {_stagedSecurities.Count} securities written into " +
-                      $"{files.Length} ticker files, {entries} filing dates, {rows} reported positions");
+                      $"{files.Length} ticker files, {entries} publication days, {rows} reported positions");
 
             WriteManagerNames();
             Directory.Delete(_stagingDirectory, recursive: true);
         }
 
         /// <summary>
-        /// Writes one security's filing dates as an entry per date inside its zip.
+        /// The day a filing reaches algorithms, which names the entry it is published under.
+        ///
+        /// LEAN live asks for the entry of today and never again for a past one, and a backtest hands
+        /// an entry over at midnight of its date. EDGAR lists a day's filings that night, so the
+        /// earliest a job can have them is the day after, and that is the entry they go in. A daily
+        /// run puts every row it reads under the day after its deployment date, a day it catches up
+        /// late included, so no backtest sees a filing before the job had it and live still reads it.
+        /// The rebuild stands for a job that ran every day.
+        /// </summary>
+        internal DateTime PublishedOn(DateTime filingDate)
+        {
+            return (_deploymentDate ?? filingDate).Date.AddDays(1);
+        }
+
+        /// <summary>
+        /// Writes one security's publication days as an entry per day inside its zip.
         ///
         /// A zip rather than a directory of loose files because a filing date holds three lines at
         /// the median and one line a third of the time: as loose files the history would be eight
@@ -2236,19 +2251,17 @@ namespace QuantConnect.DataProcessing
                 return managers;
             }
 
-            var entries = new Dictionary<string, DateTime>(StringComparer.Ordinal);
-            for (var day = after.AddDays(1); day <= _foldedThrough; day = day.AddDays(1))
-            {
-                entries[$"{day.ToStringInvariant(PeriodFormat)}.csv"] = day;
-            }
-
+            // An entry is named after the day its rows were published, never before they were filed,
+            // so only the entries after that day can hold a newer filing; its date comes from the row.
             var read = 0;
             foreach (var file in Directory.EnumerateFiles(_processedDataDirectory, "*.zip"))
             {
                 using var zip = ZipFile.OpenRead(file);
                 foreach (var entry in zip.Entries)
                 {
-                    if (!entries.TryGetValue(entry.Name, out var filed))
+                    if (!DateTime.TryParseExact(Path.GetFileNameWithoutExtension(entry.Name), PeriodFormat,
+                            CultureInfo.InvariantCulture, DateTimeStyles.None, out var published) ||
+                        published <= after)
                     {
                         continue;
                     }
@@ -2258,6 +2271,8 @@ namespace QuantConnect.DataProcessing
                     {
                         var fields = line.Split(',');
                         if (fields.Length > ManagerCikColumn &&
+                            DateTime.TryParseExact(fields[0], PeriodFormat, CultureInfo.InvariantCulture, DateTimeStyles.None, out var filed) &&
+                            filed > after &&
                             int.TryParse(fields[ManagerCikColumn], NumberStyles.Integer, CultureInfo.InvariantCulture, out var cik) &&
                             (!managers.TryGetValue(cik, out var known) || known < filed))
                         {
@@ -2270,7 +2285,7 @@ namespace QuantConnect.DataProcessing
             }
 
             Log.Trace($"SEC13FDownloader.ManagersPublishedAfter(): {managers.Count} managers already published a " +
-                      $"filing in the {entries.Count} days after {after:yyyy-MM-dd}, read from {read} entries");
+                      $"filing after {after:yyyy-MM-dd}, read from {read} entries");
             return managers;
         }
 
@@ -2284,7 +2299,7 @@ namespace QuantConnect.DataProcessing
         /// <summary>One published row: a single reported position, on the date it was filed.</summary>
         internal sealed class HoldingsRow
         {
-            /// <summary>The filing date, which names the file the row belongs in.</summary>
+            /// <summary>The filing date. The entry the row belongs in is named by PublishedOn.</summary>
             public DateTime Time { get; init; }
 
             /// <summary>The reported line itself, with the filing it came from.</summary>
@@ -2358,8 +2373,8 @@ namespace QuantConnect.DataProcessing
 
         /// <summary>
         /// Formats one reported position, in the twenty column layout SEC13FHolding parses. The
-        /// filing date leads the line although the file it lands in is named after it, so that a
-        /// line lifted out of its file still says when it was filed.
+        /// filing date leads the line, because the entry it lands in is named after the day it was
+        /// published and not after the filing.
         /// </summary>
         private static string FormatRow(HoldingsRow row)
         {

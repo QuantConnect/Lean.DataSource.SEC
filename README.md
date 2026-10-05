@@ -6,7 +6,7 @@ data marketplace.
 | Dataset | Data classes | Files |
 |---|---|---|
 | SEC Reports: 10-K, 10-Q and 8-K filings | `SECReport10K`, `SECReport10Q`, `SECReport8K` | `alternative/sec/<ticker>/<yyyyMMdd>_<form>.zip` |
-| SEC Whales: Form 13F institutional holdings, every position as its manager filed it | `SEC13FHoldings`, a collection of `SEC13FHolding` | `alternative/sec/13f/<ticker>.zip`, one entry per filing date, and `managers.csv` |
+| SEC Whales: Form 13F institutional holdings, every position as its manager filed it | `SEC13FHoldings`, a collection of `SEC13FHolding` | `alternative/sec/13f/<ticker>.zip`, one entry per publication day (the day after the EDGAR day the job reads), and `managers.csv` |
 
 `SEC13FAlgorithm` and the `SECReport*Algorithm` files are the demonstration algorithms, in C# and
 Python. The `listing-*.md` files are the marketplace listings.

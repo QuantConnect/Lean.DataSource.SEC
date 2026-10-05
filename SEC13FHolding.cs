@@ -42,7 +42,7 @@ namespace QuantConnect.DataSource
     ///
     /// This is the factory that reads one line. The points an algorithm receives are
     /// SEC13FHoldings, the collection of every record a security carries for one
-    /// filing date.
+    /// publication day.
     /// </summary>
     public class SEC13FHolding : BaseData
     {
@@ -50,7 +50,7 @@ namespace QuantConnect.DataSource
         // position, the voting authority and the two confidential treatment columns.
         private const int ExpectedColumns = 20;
 
-        /// <summary>Format of the filing date column, which is also the name of the file.</summary>
+        /// <summary>Format of the filing date column and of the publication day that names each entry.</summary>
         public const string FilingDateFormat = "yyyyMMdd";
 
         /// <summary>
@@ -59,6 +59,13 @@ namespace QuantConnect.DataSource
         /// the records of one submission back together.
         /// </summary>
         public string AccessionNumber { get; set; }
+
+        /// <summary>
+        /// The date the SEC received the submission, as the daily EDGAR index lists it. The record
+        /// reaches algorithms later, once the daily job has read that index, so Time is the day it
+        /// became available and not this date.
+        /// </summary>
+        public DateTime FilingDate { get; set; }
 
         /// <summary>
         /// Central Index Key of the manager that filed the submission. It is the stable identity of
@@ -193,17 +200,15 @@ namespace QuantConnect.DataSource
         /// The date a previously confidential filing was originally made, which the SEC publishes
         /// as DATEREPORTED. It is filled on about two filings in a thousand and is null on the
         /// rest, so it marks positions that were withheld and later released rather than serving as
-        /// a timestamp. The timestamp is Time, the filing date.
+        /// a timestamp. The filing is dated by FilingDate.
         /// </summary>
         public DateTime? DateReported { get; set; }
 
         /// <summary>
-        /// The record covers the filing date it is stamped with, ending at midnight that night.
-        ///
-        /// LEAN emits a point at its end time rather than at its time, so this is what decides when
-        /// an algorithm sees the filing: the day's filings all arrive at 00:00 the following day,
-        /// after EDGAR has finished listing that day at about 22:05 ET. Nothing is readable before
-        /// it was filed, and a whole day of filings arrives at once instead of trickling in.
+        /// Midnight of the day the record was published, which is the name of the entry it is read
+        /// from. LEAN emits a point at its end time, so this is when an algorithm sees the filing,
+        /// in a backtest and live alike: EDGAR lists a day's filings at about 22:00 ET, the daily job
+        /// reads them after that, and they arrive together at 00:00 of the day it publishes them.
         /// </summary>
         public override DateTime EndTime => Time.AddDays(1);
 
@@ -216,9 +221,12 @@ namespace QuantConnect.DataSource
         }
 
         /// <summary>
-        /// Location of the source file. One zip per security holds one entry per filing date, so
+        /// Location of the source file. One zip per security holds one entry per publication day, so
         /// that the dataset stays at a file per security instead of the eight and a half million a
         /// loose file per date would take. LEAN reads the entry straight out of the zip.
+        ///
+        /// An entry is named after the day its records became available and not after their filing
+        /// date, because live asks for the entry of today and never again for a past one.
         /// </summary>
         public override SubscriptionDataSource GetSource(SubscriptionDataConfig config, DateTime date, bool isLiveMode)
         {
@@ -251,6 +259,8 @@ namespace QuantConnect.DataSource
             }
 
             var point = Parse(csv);
+            // The entry is named after the day the record became available, and the point ends then.
+            point.Time = date.AddDays(-1);
             point.Symbol = config.Symbol;
             point.ManagerName = SEC13FManagerNameProvider.GetName(point.ManagerCik);
             return point;
@@ -262,6 +272,7 @@ namespace QuantConnect.DataSource
             var point = new SEC13FHolding
             {
                 Time = DateTime.ParseExact(csv[0], FilingDateFormat, CultureInfo.InvariantCulture),
+                FilingDate = DateTime.ParseExact(csv[0], FilingDateFormat, CultureInfo.InvariantCulture),
                 AccessionNumber = csv[1],
                 ManagerCik = int.Parse(csv[2], NumberStyles.Integer, CultureInfo.InvariantCulture),
                 PeriodEnd = DateTime.ParseExact(csv[3], FilingDateFormat, CultureInfo.InvariantCulture),
@@ -341,6 +352,7 @@ namespace QuantConnect.DataSource
                 Symbol = Symbol,
                 Time = Time,
                 Value = Value,
+                FilingDate = FilingDate,
                 AccessionNumber = AccessionNumber,
                 ManagerCik = ManagerCik,
                 ManagerName = ManagerName,

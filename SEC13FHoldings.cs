@@ -25,10 +25,10 @@ using QuantConnect.Util;
 namespace QuantConnect.DataSource
 {
     /// <summary>
-    /// Every SEC Form 13F position reported for one security on one filing date. A day's point
-    /// carries one SEC13FHolding per reported line, so a manager that filed for the security that
-    /// day appears once for each line it reported it on, and a day on which several managers filed
-    /// carries all of them.
+    /// Every SEC Form 13F position published for one security on one day. A day's point carries
+    /// one SEC13FHolding per reported line, so a manager that filed for the security appears once
+    /// for each line it reported it on, and a day on which several managers filed carries all of
+    /// them.
     ///
     /// The collection carries no totals of its own. How many managers hold the security and how
     /// many shares they hold between them are counts over the records, and no 13F filing states
@@ -43,7 +43,7 @@ namespace QuantConnect.DataSource
         private static readonly SEC13FHolding _factory = new();
 
         /// <summary>
-        /// Location of the source file. One zip per security holds one entry per filing date, so
+        /// Location of the source file. One zip per security holds one entry per publication day, so
         /// that the dataset stays at a file per security instead of the eight and a half million a
         /// loose file per date would take. LEAN reads the entry straight out of the zip.
         /// </summary>
@@ -55,7 +55,7 @@ namespace QuantConnect.DataSource
         /// <summary>
         /// Reads one line of the file into one reported position. The engine folds the lines this
         /// returns into the collection, grouping them by their end time, and every line of a file
-        /// carries the same filing date, so one file gives one point.
+        /// carries the same publication day, so one file gives one point.
         /// </summary>
         public override BaseData Reader(SubscriptionDataConfig config, string line, DateTime date, bool isLiveMode)
         {

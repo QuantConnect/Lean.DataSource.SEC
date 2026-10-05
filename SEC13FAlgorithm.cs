@@ -47,7 +47,7 @@ namespace QuantConnect.DataLibrary.Tests
         public override void Initialize()
         {
             // Two filings fall in this window: the March 2026 quarter, filed on 15 May, and the June
-            // quarter, filed on 14 August. Each reaches the algorithm at midnight after its filing date.
+            // quarter, filed on 14 August. Each reaches the algorithm at midnight after the day it was filed.
             SetStartDate(2026, 5, 1);
             SetEndDate(2026, 8, 31);
             SetCash(100000);
@@ -64,8 +64,8 @@ namespace QuantConnect.DataLibrary.Tests
         {
             foreach (var (dataSymbol, point) in slice.Get<SEC13FHoldings>())
             {
-                // One point per filing date, carrying every position every manager reported for the
-                // security that day. An amendment restates lines already counted and an option line
+                // One point per day, carrying every position the managers that filed the day before
+                // reported for the security. An amendment restates lines already counted and an option line
                 // states the shares under the contracts, so both are left out of the share count.
                 foreach (var holding in point.OfType<SEC13FHolding>().Where(holding =>
                              Managers.Contains(holding.ManagerCik) && holding.FormType == "13F-HR" &&
@@ -82,7 +82,7 @@ namespace QuantConnect.DataLibrary.Tests
                 }
             }
 
-            // A 13F point arrives at midnight the day after its filing date, which is not
+            // A 13F point arrives at midnight the day after the filings were made, which is not
             // necessarily a day the equities print a bar, so the orders wait for prices.
             if (!_rebalance || slice.Bars.Count == 0)
             {

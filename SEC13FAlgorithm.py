@@ -27,7 +27,7 @@ class SEC13FAlgorithm(QCAlgorithm):
 
     def initialize(self) -> None:
         # Two filings fall in this window: the March 2026 quarter, filed on 15 May, and the June
-        # quarter, filed on 14 August. Each reaches the algorithm at midnight after its filing date.
+        # quarter, filed on 14 August. Each reaches the algorithm at midnight after the day it was filed.
         self.set_start_date(2026, 5, 1)
         self.set_end_date(2026, 8, 31)
         self.set_cash(100000)
@@ -43,8 +43,8 @@ class SEC13FAlgorithm(QCAlgorithm):
 
     def on_data(self, slice: Slice) -> None:
         for data_symbol, point in slice.get(SEC13FHoldings).items():
-            # One point per filing date, carrying every position every manager reported for the
-            # security that day. An amendment restates lines already counted and an option line
+            # One point per day, carrying every position the managers that filed the day before
+            # reported for the security. An amendment restates lines already counted and an option line
             # states the shares under the contracts, so both are left out of the share count.
             for holding in point:
                 if (holding.manager_cik not in self.MANAGERS or holding.form_type != "13F-HR"
@@ -61,7 +61,7 @@ class SEC13FAlgorithm(QCAlgorithm):
                          f"{holding.amount:,.0f} shares, {holding.market_value:,.0f} USD, "
                          f"for {holding.period_end:%Y-%m-%d}")
 
-        # A 13F point arrives at midnight the day after its filing date, which is not necessarily
+        # A 13F point arrives at midnight the day after the filings were made, which is not necessarily
         # a day the equities print a bar, so the orders wait for prices.
         if not self._rebalance or slice.bars.count == 0:
             return

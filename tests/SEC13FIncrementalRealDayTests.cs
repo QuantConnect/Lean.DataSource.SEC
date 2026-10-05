@@ -120,7 +120,8 @@ namespace QuantConnect.DataLibrary.Tests
 
             // Every zip this run wrote must still hold what was published for that security, or the
             // run has just cut its history down to one day.
-            var entry = $"{day:yyyyMMdd}.csv";
+            // The run publishes the day under the next one, when the job has it.
+            var entry = $"{day.AddDays(1):yyyyMMdd}.csv";
             var lost = 0;
             var gained = 0;
             foreach (var path in touched)

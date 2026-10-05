@@ -60,10 +60,14 @@ namespace QuantConnect.DataLibrary.Tests
                 false, false, false);
         }
 
-        /// <summary>Reads one line through the factory, the way the folding reader does.</summary>
-        private static SEC13FHolding Read(string line, string ticker = "AAPL")
+        /// <summary>
+        /// Reads one line through the factory, the way the folding reader does. The date is the
+        /// entry's, which by default is the day after the line's filing date, as the job writes it.
+        /// </summary>
+        private static SEC13FHolding Read(string line, string ticker = "AAPL", DateTime? entry = null)
         {
-            return new SEC13FHolding().Reader(Config(ticker), line, DateTime.UtcNow, false) as SEC13FHolding;
+            var date = entry ?? DateTime.ParseExact(line[..8], "yyyyMMdd", null).AddDays(1);
+            return new SEC13FHolding().Reader(Config(ticker), line, date, false) as SEC13FHolding;
         }
 
         /// <summary>Builds the collection LEAN would fold a file's lines into.</summary>
@@ -84,7 +88,7 @@ namespace QuantConnect.DataLibrary.Tests
         {
             var holding = Read(FullLine);
 
-            Assert.AreEqual(new DateTime(2026, 8, 14), holding.Time);
+            Assert.AreEqual(new DateTime(2026, 8, 14), holding.FilingDate);
             Assert.AreEqual("0001067983-26-000012", holding.AccessionNumber);
             Assert.AreEqual(1067983, holding.ManagerCik);
             Assert.AreEqual(new DateTime(2026, 6, 30), holding.PeriodEnd);
@@ -107,18 +111,29 @@ namespace QuantConnect.DataLibrary.Tests
         }
 
         [Test]
-        public void ThePointCoversItsFilingDateAndIsEmittedWhenThatDayEnds()
+        public void ThePointIsEmittedAtMidnightOfTheDayItsEntryWasPublished()
         {
-            // LEAN emits a point at its end time, not at its time, so this pair is what decides when
-            // an algorithm sees a filing: a filing made on the 14th reaches it at 00:00 on the 15th,
-            // after EDGAR has finished listing the 14th at about 22:05 ET. Reading the end time as
-            // anything but the moment of delivery is the mistake this test exists to prevent.
-            var holding = Read(FullLine);
+            // LEAN emits a point at its end time, and live asks for the entry of today and never for
+            // a past one, so the entry's day is when an algorithm sees a filing, in a backtest and
+            // live alike. A filing made on the 14th and published by the job that night reaches it at
+            // 00:00 on the 15th.
+            var holding = Read(FullLine, entry: new DateTime(2026, 8, 15));
 
-            Assert.AreEqual(new DateTime(2026, 8, 14), holding.Time, "covers its filing date");
-            Assert.AreEqual(new DateTime(2026, 8, 15), holding.EndTime, "delivered when that day ends");
+            Assert.AreEqual(new DateTime(2026, 8, 14), holding.FilingDate);
+            Assert.AreEqual(new DateTime(2026, 8, 15), holding.EndTime, "delivered when its entry's day starts");
             Assert.AreEqual(TimeSpan.FromDays(1), holding.EndTime - holding.Time,
                 "a whole day of filings arrives at once, never partway through the day itself");
+        }
+
+        [Test]
+        public void AFilingPublishedLateIsEmittedWhenItWasPublished()
+        {
+            // A run that catches a day up late publishes its filings under the day it ran, so a
+            // backtest sees them no earlier than live could, while the filing keeps its own date.
+            var holding = Read(FullLine, entry: new DateTime(2026, 8, 20));
+
+            Assert.AreEqual(new DateTime(2026, 8, 14), holding.FilingDate);
+            Assert.AreEqual(new DateTime(2026, 8, 20), holding.EndTime);
         }
 
         [Test]
@@ -141,7 +156,7 @@ namespace QuantConnect.DataLibrary.Tests
             var line = FullLine.Replace("20260630", periodEnd).Replace("20260814", filingDate);
             var holding = Read(line);
 
-            Assert.AreEqual(DateTime.ParseExact(filingDate, "yyyyMMdd", null), holding.Time);
+            Assert.AreEqual(DateTime.ParseExact(filingDate, "yyyyMMdd", null), holding.FilingDate);
             Assert.AreEqual(DateTime.ParseExact(periodEnd, "yyyyMMdd", null), holding.PeriodEnd);
         }
 
@@ -465,12 +480,14 @@ namespace QuantConnect.DataLibrary.Tests
                     string line;
                     while ((line = reader.ReadLine()) != null)
                     {
-                        var holding = Read(line, Path.GetFileNameWithoutExtension(path));
+                        var published = DateTime.ParseExact(Path.GetFileNameWithoutExtension(entry.Name), "yyyyMMdd", null);
+                        var holding = Read(line, Path.GetFileNameWithoutExtension(path), published);
                         Assert.IsNotNull(holding, $"{path}#{entry.Name}: {line}");
 
-                        // The entry is named after the filing date every line in it carries.
-                        Assert.AreEqual(Path.GetFileNameWithoutExtension(entry.Name),
-                            holding.Time.ToString("yyyyMMdd"), $"{path}#{entry.Name}");
+                        // The entry is named after the day its lines were published, which is never
+                        // before they were filed.
+                        Assert.AreEqual(published, holding.EndTime, $"{path}#{entry.Name}");
+                        Assert.Greater(published, holding.FilingDate, $"{path}#{entry.Name}: {line}");
                         Assert.IsFalse(holding.OtherManager.Contains(";;"), $"{path}#{entry.Name}: {line}");
                         rows++;
                     }

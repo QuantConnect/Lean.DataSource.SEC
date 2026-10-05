@@ -351,6 +351,10 @@ namespace QuantConnect.DataProcessing
         public void Run()
         {
             RequireEmptyDestination();
+            if (_deploymentDate != null)
+            {
+                RequireDeploymentDateOfTodayOrYesterday(_deploymentDate.Value, DateTime.UtcNow.ConvertFromUtc(TimeZones.NewYork).Date);
+            }
             RequirePublishedHistoryForIncrementalRun();
             ReadEdgarState();
 
@@ -496,6 +500,24 @@ namespace QuantConnect.DataProcessing
         private static DateTime YesterdayInNewYork()
         {
             return DateTime.UtcNow.ConvertFromUtc(TimeZones.NewYork).Date.AddDays(-1);
+        }
+
+        /// <summary>
+        /// Stops a daily run whose deployment date is neither today nor yesterday in New York. Every
+        /// row a run reads is published under the day after its deployment date, so a date in the
+        /// past writes entries live has already gone by, and a date in the future hides the rows until
+        /// that day comes. Neither is needed to repair a gap: a run with today's date reads every day
+        /// still missing on its own.
+        /// </summary>
+        internal static void RequireDeploymentDateOfTodayOrYesterday(DateTime deploymentDate, DateTime todayInNewYork)
+        {
+            if (deploymentDate.Date > todayInNewYork || deploymentDate.Date < todayInNewYork.AddDays(-1))
+            {
+                throw new InvalidOperationException(
+                    $"SEC13FDownloader.Run(): the deployment date {deploymentDate:yyyy-MM-dd} is not today or yesterday in " +
+                    $"New York ({todayInNewYork:yyyy-MM-dd}). Its rows would be published under {deploymentDate.AddDays(1):yyyy-MM-dd}, " +
+                    "where live would not read them today. Run with today's date instead: it catches up every missed day.");
+            }
         }
 
         /// <summary>

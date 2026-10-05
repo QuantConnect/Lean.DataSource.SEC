@@ -1186,6 +1186,25 @@ namespace QuantConnect.DataLibrary.Tests
         }
 
         [Test]
+        public void ARowGoesUnderTheTickerInForceTheDayItIsPublished()
+        {
+            // LEAN opens the entry of a day in the zip of the ticker the security carries that day.
+            // A filing made on Friday 14 August is published on the 15th, and the company trades as
+            // NEW from Monday the 17th, so the map file already answers NEW for the 15th. Taken on
+            // the filing date the row went to old.zip, where nothing ever reads that entry.
+            var company = SecurityIdentifier.GenerateEquity(new DateTime(1980, 12, 12), "OLD", Market.USA);
+            SeedMapFileRows(("new", new[] { "19801212,old", "20260814,old", "20501231,new" }));
+            SeedSecurityDatabase($"{company},03783310,BBG000B9XRY4,2046251,US0378331005,320193");
+
+            var day = new DateTime(2026, 8, 14);
+            var filing = OptionFiling(day);
+            filing.Lines.Add(["037833100", "COM", "1000", "50", "SH", null, "SOLE", null, "50", "0", "0"]);
+
+            Assert.AreEqual(1, PublishedRows(day, filing, "new").Count);
+            Assert.IsFalse(File.Exists(Path.Combine(_root, "out", SEC13FHolding.ReportFolder, "old.zip")));
+        }
+
+        [Test]
         public void AnOptionOnAFundFamilyIsResolvedByThePriceOfItsLine()
         {
             // Every fund of a family shares one option CUSIP, so the issuer does not say which fund a
@@ -1619,7 +1638,7 @@ namespace QuantConnect.DataLibrary.Tests
 
             var destination = Path.Combine(_root, "out", SEC13FHolding.ReportFolder);
             using var zip = ZipFile.OpenRead(Path.Combine(destination, "aapl.zip"));
-            Assert.AreEqual(new[] { "20240215.csv", "20260815.csv" }, zip.Entries.Select(entry => entry.Name).OrderBy(name => name).ToArray());
+            Assert.AreEqual(new[] { "20240216.csv", "20260815.csv" }, zip.Entries.Select(entry => entry.Name).OrderBy(name => name).ToArray());
             Assert.IsFalse(File.Exists(Path.Combine(destination, "aapl.csv")), "the date index is gone");
         }
 
@@ -1999,13 +2018,17 @@ namespace QuantConnect.DataLibrary.Tests
             SeedPublishedZip(shelf, ticker, 1, dates);
         }
 
-        /// <summary>A published security zip whose every row was filed by one manager.</summary>
+        /// <summary>
+        /// A published security zip whose every row was filed by one manager, one on each filing date
+        /// given, each published under the next day as the job writes it.
+        /// </summary>
         private static void SeedPublishedZip(string shelf, string ticker, int cik, params string[] dates)
         {
             using var zip = ZipFile.Open(Path.Combine(shelf, $"{ticker}.zip"), ZipArchiveMode.Create);
             foreach (var date in dates)
             {
-                using var writer = new StreamWriter(zip.CreateEntry($"{date}.csv").Open());
+                var published = DateTime.ParseExact(date, "yyyyMMdd", null).AddDays(1);
+                using var writer = new StreamWriter(zip.CreateEntry($"{published:yyyyMMdd}.csv").Open());
                 writer.Write($"{date},0000000000-24-000001,{cik},20231231,13F-HR,,,COM,1,SH,1,0,,SOLE,,1,0,0,0,\n");
             }
         }

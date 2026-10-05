@@ -55,6 +55,8 @@ public override void OnData(Slice slice)
 }
 ```
 
+The **FilingDate** property is the day the manager filed the report, and the data point arrives at midnight after EDGAR lists the filing. The **PeriodEnd** property is the quarter the report describes.
+
 To iterate through all of the dataset objects in the current **Slice**, call the **Get** method.
 
 ```python

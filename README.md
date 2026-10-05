@@ -35,6 +35,18 @@ with `sec-13f-rebuild-history` set to `true`, it rebuilds the whole history: the
 sets from 2013 as far as they reach, then EDGAR day by day. A full rebuild takes about an hour,
 3 GB of downloads, 4 GB of output and some 10 GB of temporary disk.
 
+A daily run publishes everything it reads under the day after its deployment date, the entry live
+asks for that day, so it refuses a deployment date other than today or yesterday in New York. A
+missed day needs no rerun of its date: the next run, or a Manual Run with today's date, catches it
+up. Schedule the job at 23:00 ET, after EDGAR publishes the daily index at about 22:00, with the
+Date Offset set to process that same day; backtest and live then both get the day at midnight with
+no lookahead, and a run after midnight adds that much lookahead. Set the cron in America/New_York:
+a UTC schedule moves an hour earlier when daylight saving ends, before the index is out, and every
+day would then arrive a day late through the winter.
+
+A history published before entries were named by publication day names them by filing date, which
+the reader delivers a day early, so it has to be replaced by a rebuild before the first daily run.
+
 The 13F run depends on three things in the LEAN data folder, none of which it downloads:
 
 | Data | Path under the data folder | Used for |

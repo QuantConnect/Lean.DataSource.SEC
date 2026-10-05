@@ -495,11 +495,36 @@ namespace QuantConnect.DataLibrary.Tests
             // the window on its own would republish thirteen years as three months and return
             // success: the files come out the right shape, so no row count tells the two apart. The
             // guard runs before anything is fetched.
+            // Today's date, so the deployment date guard lets the run through to this one.
             using var downloader = new SEC13FDownloader(
-                Path.Combine(_root, "out"), Path.Combine(_root, "processed"), new DateTime(2026, 9, 8));
+                Path.Combine(_root, "out"), Path.Combine(_root, "processed"), DateTime.UtcNow.ConvertFromUtc(TimeZones.NewYork).Date);
 
-            Assert.Throws<InvalidOperationException>(() => downloader.Run(),
+            var error = Assert.Throws<InvalidOperationException>(() => downloader.Run(),
                 "the run carried on with no history behind it");
+            Assert.That(error.Message, Does.Not.Contain("deployment date"));
+        }
+
+        [TestCase("20261004", true, TestName = "a deployment date of today is accepted")]
+        [TestCase("20261003", true, TestName = "a deployment date of yesterday is accepted")]
+        [TestCase("20261002", false, TestName = "a deployment date before yesterday is refused")]
+        [TestCase("20261005", false, TestName = "a deployment date in the future is refused")]
+        public void ADailyRunTakesOnlyTheDeploymentDateOfTodayOrYesterday(string deploymentDate, bool accepted)
+        {
+            // Every row a run reads is published under the day after its deployment date. A Manual Run
+            // with an old date writes an entry live has gone by, and a typo in the future hides the
+            // rows until that day; a run with today's date catches up the missed days on its own.
+            var today = new DateTime(2026, 10, 4);
+            var date = DateTime.ParseExact(deploymentDate, "yyyyMMdd", null);
+
+            TestDelegate check = () => SEC13FDownloader.RequireDeploymentDateOfTodayOrYesterday(date, today);
+            if (accepted)
+            {
+                Assert.DoesNotThrow(check);
+            }
+            else
+            {
+                Assert.Throws<InvalidOperationException>(check);
+            }
         }
 
         [Test]

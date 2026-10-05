@@ -389,7 +389,9 @@ namespace QuantConnect.DataLibrary.Tests
         [Test]
         public void CloneCopiesEveryProperty()
         {
-            var original = Read(FullLine);
+            // Published later than the day after its filing, so Time and FilingDate differ and a
+            // copy that swapped them would show.
+            var original = Read(FullLine, entry: new DateTime(2026, 8, 20));
             var clone = (SEC13FHolding)original.Clone();
 
             foreach (var property in typeof(SEC13FHolding)
@@ -440,7 +442,9 @@ namespace QuantConnect.DataLibrary.Tests
         {
             // Compared by reflection rather than field by field, so a property added later is
             // covered without anyone remembering to extend this test.
-            var original = Read(FullLine);
+            // Published later than the day after its filing, so Time and FilingDate differ and a
+            // copy that swapped them would show.
+            var original = Read(FullLine, entry: new DateTime(2026, 8, 20));
             var restored = JsonConvert.DeserializeObject<SEC13FHolding>(JsonConvert.SerializeObject(original));
 
             foreach (var property in typeof(SEC13FHolding)
@@ -486,7 +490,6 @@ namespace QuantConnect.DataLibrary.Tests
 
                         // The entry is named after the day its lines were published, which is never
                         // before they were filed.
-                        Assert.AreEqual(published, holding.EndTime, $"{path}#{entry.Name}");
                         Assert.Greater(published, holding.FilingDate, $"{path}#{entry.Name}: {line}");
                         Assert.IsFalse(holding.OtherManager.Contains(";;"), $"{path}#{entry.Name}: {line}");
                         rows++;

@@ -1298,7 +1298,11 @@ namespace QuantConnect.DataProcessing
                         continue;
                     }
 
-                    var ticker = security == null ? null : ResolveTicker(security, key.FilingDate);
+                    // The ticker is the one in force on the day the row is published, because that
+                    // is the day LEAN maps the subscription to when it opens the entry. Taken on the
+                    // filing date, a rename in between files the row under a ticker no one reads.
+                    var published = PublishedOn(key.FilingDate);
+                    var ticker = security == null ? null : ResolveTicker(security, published);
                     if (string.IsNullOrWhiteSpace(ticker) || !IsFileNameSafe(ticker))
                     {
                         _unresolvedGroups++;
@@ -1308,7 +1312,7 @@ namespace QuantConnect.DataProcessing
 
                     // Whoever reads the ticker's file takes its rows to belong to the security that
                     // owns the ticker that day; a group of another security is dropped, not mixed in.
-                    var owner = TickerOwner(ticker, key.FilingDate);
+                    var owner = TickerOwner(ticker, published);
                     if (owner != security.ToString())
                     {
                         _conflictingTickers++;
@@ -1419,7 +1423,7 @@ namespace QuantConnect.DataProcessing
                     ? candidates.Where(candidate => MatchesClose(line.ReportedValue.Value / line.Amount.Value, candidate.Close.Value)).ToList()
                     : [];
 
-                var ticker = matches.Count == 1 ? ResolveTicker(matches[0].Security, key.FilingDate) : null;
+                var ticker = matches.Count == 1 ? ResolveTicker(matches[0].Security, PublishedOn(key.FilingDate)) : null;
                 if (string.IsNullOrWhiteSpace(ticker) || !IsFileNameSafe(ticker))
                 {
                     _optionLinesWithoutOneMatch++;
@@ -2099,7 +2103,9 @@ namespace QuantConnect.DataProcessing
         /// earliest a job can have them is the day after, and that is the entry they go in. A daily
         /// run puts every row it reads under the day after its deployment date, a day it catches up
         /// late included, so no backtest sees a filing before the job had it and live still reads it.
-        /// The rebuild stands for a job that ran every day.
+        /// The rebuild stands for a job that ran every day, with one difference: the data sets date a
+        /// filing by its own filing date, so the rare one an index listed a day late is published a
+        /// day earlier than the daily job published it.
         /// </summary>
         internal DateTime PublishedOn(DateTime filingDate)
         {

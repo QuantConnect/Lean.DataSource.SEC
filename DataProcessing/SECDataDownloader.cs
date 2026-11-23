@@ -584,7 +584,7 @@ namespace QuantConnect.DataProcessing
                 catch (HttpRequestException e) when (e.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.TooManyRequests)
                 {
                     // Rate limited or not served (yet): back off like the index downloads do
-                    Log.Trace($"SECDataDownloader.DownloadArchive(): {StatusOrMessage(e)} - retrying in {ArchiveRetryDelay.TotalSeconds}s: {url} answered: {e.Message}");
+                    Log.Trace($"SECDataDownloader.DownloadArchive(): {StatusOrMessage(e)} - retrying in {ArchiveRetryDelay.TotalSeconds.ToString(CultureInfo.InvariantCulture)}s: {url} answered: {e.Message}");
                     Thread.Sleep(ArchiveRetryDelay);
                 }
                 catch (HttpRequestException e) when (e.StatusCode is { } status
@@ -658,7 +658,7 @@ namespace QuantConnect.DataProcessing
             }
             catch (OperationCanceledException)
             {
-                note = $" (body incomplete after {RefusalBodyTimeout.TotalSeconds}s)";
+                note = $" (body incomplete after {RefusalBodyTimeout.TotalSeconds.ToString(CultureInfo.InvariantCulture)}s)";
             }
             catch (Exception e)
             {

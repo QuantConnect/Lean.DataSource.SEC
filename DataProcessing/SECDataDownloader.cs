@@ -472,7 +472,7 @@ namespace QuantConnect.DataProcessing
         /// the first byte still missing. A short read is therefore not an error -- the loop just
         /// continues from wherever the response actually stopped.
         /// </remarks>
-        private long DownloadArchive(HttpClient client, string url, string destination)
+        internal long DownloadArchive(HttpClient client, string url, string destination)
         {
             long CurrentLength() => File.Exists(destination) ? new FileInfo(destination).Length : 0L;
 
@@ -522,6 +522,16 @@ namespace QuantConnect.DataProcessing
                             File.Delete(destination);
                         }
                     }
+                    else if (response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.TooManyRequests)
+                    {
+                        // The archives are served from S3, which answers one it doesn't serve with a
+                        // 403 AccessDenied, while EDGAR throttles with a 403 rate-limit page: only
+                        // the body tells them apart. The 2026-11-16 archive got 403s for hours on 17 Nov
+                        // 2026 while EDGAR's other files answered, and served normally days later.
+                        var body = response.Content.ReadAsStringAsync().SynchronouslyAwaitTaskResult();
+                        body = string.Join(" ", body.Split((char[])null, StringSplitOptions.RemoveEmptyEntries));
+                        throw new HttpRequestException(body[..Math.Min(body.Length, 300)], null, response.StatusCode);
+                    }
                     else
                     {
                         response.EnsureSuccessStatusCode();
@@ -561,8 +571,8 @@ namespace QuantConnect.DataProcessing
                 }
                 catch (HttpRequestException e) when (e.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.TooManyRequests)
                 {
-                    // We've been rate limited: back off like the index downloads do
-                    Log.Trace($"SECDataDownloader.DownloadArchive(): Rate limited ({StatusOrMessage(e)}) - retrying in 10s: {url}");
+                    // Rate limited or not served (yet): back off like the index downloads do
+                    Log.Trace($"SECDataDownloader.DownloadArchive(): {StatusOrMessage(e)} - retrying in 10s: {url} answered: {e.Message}");
                     Thread.Sleep(10000);
                 }
                 catch (HttpRequestException e) when (e.StatusCode is { } status

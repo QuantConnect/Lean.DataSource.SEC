@@ -60,6 +60,20 @@ namespace QuantConnect.DataProcessing
         public long ChunkSizeBytes = 100 * 1024 * 1024;
 
         /// <summary>
+        /// Wait before requesting a feed archive again after a refused or empty attempt.
+        /// </summary>
+        internal TimeSpan ArchiveRetryDelay = TimeSpan.FromSeconds(10);
+
+        /// <summary>
+        /// Longest wait for the body of a refused archive request, which is read only to be logged.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="HttpClient.Timeout"/> stops at the headers of a <see cref="HttpCompletionOption.ResponseHeadersRead"/>
+        /// request, so without this a body that never completes would hold up the retries.
+        /// </remarks>
+        internal TimeSpan RefusalBodyTimeout = TimeSpan.FromSeconds(10);
+
+        /// <summary>
         /// SEC data downloader constructor
         /// </summary>
         public SECDataDownloader()
@@ -472,7 +486,7 @@ namespace QuantConnect.DataProcessing
         /// the first byte still missing. A short read is therefore not an error -- the loop just
         /// continues from wherever the response actually stopped.
         /// </remarks>
-        private long DownloadArchive(HttpClient client, string url, string destination)
+        internal long DownloadArchive(HttpClient client, string url, string destination)
         {
             long CurrentLength() => File.Exists(destination) ? new FileInfo(destination).Length : 0L;
 
@@ -522,6 +536,14 @@ namespace QuantConnect.DataProcessing
                             File.Delete(destination);
                         }
                     }
+                    else if (response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.TooManyRequests)
+                    {
+                        // The archives are served from S3, which answers one it doesn't serve with a
+                        // 403 AccessDenied, while EDGAR throttles with a 403 rate-limit page: only
+                        // the body tells them apart. The 2026-11-16 archive got 403s for hours on 17 Nov
+                        // 2026 while EDGAR's other files answered, and served normally days later.
+                        throw new HttpRequestException(RefusalBody(response), null, response.StatusCode);
+                    }
                     else
                     {
                         response.EnsureSuccessStatusCode();
@@ -561,9 +583,9 @@ namespace QuantConnect.DataProcessing
                 }
                 catch (HttpRequestException e) when (e.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.TooManyRequests)
                 {
-                    // We've been rate limited: back off like the index downloads do
-                    Log.Trace($"SECDataDownloader.DownloadArchive(): Rate limited ({StatusOrMessage(e)}) - retrying in 10s: {url}");
-                    Thread.Sleep(10000);
+                    // Rate limited or not served (yet): back off like the index downloads do
+                    Log.Trace($"SECDataDownloader.DownloadArchive(): {StatusOrMessage(e)} - retrying in {ArchiveRetryDelay.TotalSeconds.ToString(CultureInfo.InvariantCulture)}s: {url} answered: {e.Message}");
+                    Thread.Sleep(ArchiveRetryDelay);
                 }
                 catch (HttpRequestException e) when (e.StatusCode is { } status
                     && (int)status is >= 400 and < 500 && status != HttpStatusCode.RequestTimeout)
@@ -596,7 +618,7 @@ namespace QuantConnect.DataProcessing
                     // A stall means the server errored before sending a single byte. Give it
                     // room to recover instead of burning the whole budget within a second or
                     // two, since only the 220ms rate gate spaces the attempts otherwise.
-                    Thread.Sleep(10000);
+                    Thread.Sleep(ArchiveRetryDelay);
                 }
             }
 
@@ -610,6 +632,43 @@ namespace QuantConnect.DataProcessing
         /// </summary>
         private static string StatusOrMessage(HttpRequestException err)
             => err.StatusCode is { } status ? ((int)status).ToString() : err.Message;
+
+        /// <summary>
+        /// The first 300 characters of a refused request's body, on one line, for the log: whatever
+        /// arrived within <see cref="RefusalBodyTimeout"/>, so a body that stalls or breaks off
+        /// never delays the retry.
+        /// </summary>
+        private string RefusalBody(HttpResponseMessage response)
+        {
+            const int maxChars = 300;
+            var received = new MemoryStream();
+            var note = string.Empty;
+            try
+            {
+                using var cancellation = new CancellationTokenSource(RefusalBodyTimeout);
+                using var stream = response.Content.ReadAsStreamAsync(cancellation.Token).SynchronouslyAwaitTaskResult();
+                // Up to 4 bytes a character in UTF-8, plus room for the whitespace that gets collapsed
+                var buffer = new byte[4096];
+                int read;
+                while (received.Length < 4 * maxChars + buffer.Length
+                    && (read = stream.ReadAsync(buffer, cancellation.Token).AsTask().SynchronouslyAwaitTaskResult()) > 0)
+                {
+                    received.Write(buffer, 0, read);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                note = $" (body incomplete after {RefusalBodyTimeout.TotalSeconds.ToString(CultureInfo.InvariantCulture)}s)";
+            }
+            catch (Exception e)
+            {
+                note = $" (body unreadable: {e.Message})";
+            }
+
+            var text = System.Text.Encoding.UTF8.GetString(received.GetBuffer(), 0, (int)received.Length);
+            text = string.Join(" ", text.Split((char[])null, StringSplitOptions.RemoveEmptyEntries));
+            return text[..Math.Min(text.Length, maxChars)] + note;
+        }
 
         /// <summary>
         /// Downloads the archive index file
